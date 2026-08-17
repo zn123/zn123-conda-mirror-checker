@@ -30,4 +30,7 @@ const MIRRORS = [
   { id: 'netease',  name: '网易 163（已废弃）',        base: 'https://mirrors.163.com/anaconda/pkgs/main',     cf: 'https://mirrors.163.com/anaconda/cloud/conda-forge',deprecated: true },
 ];
 
-module.exports = MIRRORS;
+// 双模式导出：Node 端（server.js 用 require）走 CommonJS；浏览器端（静态站
+// 点 <script> 引入）挂到 window.MIRRORS，供前端 app.js 直接读取。
+if (typeof module !== 'undefined' && module.exports) module.exports = MIRRORS;
+if (typeof window !== 'undefined') window.MIRRORS = MIRRORS;

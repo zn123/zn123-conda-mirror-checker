@@ -7,13 +7,11 @@ function fmt(r) {
   return `${r.statusCode ?? '—'} · ${r.latency ?? 0}ms`;
 }
 
-// 索引单元格：在状态码后标注实际探测的索引文件（current_repodata.json / 回退 repodata.json）
+// 索引单元格：简化方案下，索引始终用 HEAD repodata.json 做可达性探测（不下载正文）
 function fmtRepo(m) {
   const base = fmt(m.repodata);
-  const fellBack = m.repodataFile === 'repodata.json';
-  const file = fellBack ? 'repodata' : 'current';
-  const tag = fellBack ? ' ↩回退' : '';
-  return `${base}<div class="idx-file">${file}${tag}</div>`;
+  const tag = m.repodataParsed ? 'repodata' : 'repodata(HEAD)';
+  return `${base}<div class="idx-file">${tag}</div>`;
 }
 
 function short(s) {
@@ -72,8 +70,9 @@ function upsertRow(m) {
   }
   tr.className = m.status;
   const proxyBadge = m.redirected ? '<span class="badge proxy">↪代理</span>' : '';
+  const archiveBadge = m.isArchive ? '<span class="badge archive">归档包</span>' : '';
   tr.innerHTML = `
-    <td class="name">${m.name}${proxyBadge}<div class="base">${m.base}</div></td>
+    <td class="name">${m.name}${proxyBadge}${archiveBadge}<div class="base">${m.base}</div></td>
     <td>${fmtRepo(m)}</td>
     <td>${fmt(m.pkg)}</td>
     <td>${m.latency}ms</td>

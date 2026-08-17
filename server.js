@@ -8,8 +8,116 @@ const PORT = process.env.PORT || 6688;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 
-// 兜底包名：仅在 repodata 解析失败、拿不到真实包名时使用（win-64 的 python 3.12.13 build）
-const PKG_FALLBACK = 'python-3.12.13-hd7b1df3_3.conda';
+// 硬编码的 python 包名表：按 [频道][平台][主次版本] 索引，值为该版本在官方源实际存在的包文件名。
+// 这些文件名来自官方 current_repodata.json（运行时已核验真实存在），属 immutable 制品，验证一次长期有效。
+// 探测时直接 HEAD 此文件名，不解析任何索引、不下载正文。
+// 注意：官方源一旦为某版本发布新 build（如 3.12.13→3.12.14），旧 build 名可能从部分镜像移除而被探到 404；
+//      属「最佳努力」——活跃版若遇 404 不一定代表镜像失效，可结合索引可达性判断。归档版(≤3.5)为 EOL 稳定名。
+// 频道键：cf=conda-forge，main=defaults(pkgs/main)。
+const PY_PKG = {
+  cf: {
+    'win-64': {
+      '2.7': 'python-2.7.15-h2880e7c_1011_cpython.tar.bz2',
+      '3.5': 'python-3.5.5-he025d50_2.tar.bz2',
+      '3.6': 'python-3.6.15-h39d44d4_0_cpython.tar.bz2',
+      '3.7': 'python-3.7.12-h900ac77_100_cpython.tar.bz2',
+      '3.8': 'python-3.8.20-hfaddaf0_2_cpython.conda',
+      '3.9': 'python-3.9.23-h8c5b53a_0_cpython.conda',
+      '3.10': 'python-3.10.20-hc20f281_1_cpython.conda',
+      '3.11': 'python-3.11.15-hb12b558_2_cpython.conda',
+      '3.12': 'python-3.12.13-hb12b558_1_cpython.conda',
+      '3.13': 'python-3.13.15-ha261ea0_0_cp313t.conda',
+      '3.14': 'python-3.14.6-hb4b0029_2_cp314t.conda',
+    },
+    'linux-64': {
+      '2.7': 'python-2.7.15-h9fef7bc_0.tar.bz2',
+      '3.5': 'python-3.5.5-h5001a0f_2.tar.bz2',
+      '3.6': 'python-3.6.15-hb7a2778_0_cpython.tar.bz2',
+      '3.7': 'python-3.7.12-hf930737_100_cpython.tar.bz2',
+      '3.8': 'python-3.8.20-h4a871b0_2_cpython.conda',
+      '3.9': 'python-3.9.23-hc30ae73_0_cpython.conda',
+      '3.10': 'python-3.10.20-h3c07f61_0_cpython.conda',
+      '3.11': 'python-3.11.15-hd63d673_0_cpython.conda',
+      '3.12': 'python-3.12.13-hd63d673_0_cpython.conda',
+      '3.13': 'python-3.13.15-hb101c97_101_cp313.conda',
+      '3.14': 'python-3.14.6-hf9ea5aa_1_cp314t.conda',
+    },
+    'osx-64': {
+      '2.7': 'python-2.7.15-hd51d24c_1009.tar.bz2',
+      '3.5': 'python-3.5.5-h5001a0f_2.tar.bz2',
+      '3.6': 'python-3.6.15-haf480d7_0_cpython.tar.bz2',
+      '3.7': 'python-3.7.12-hf3644f1_100_cpython.tar.bz2',
+      '3.8': 'python-3.8.20-h4f978b9_2_cpython.conda',
+      '3.9': 'python-3.9.23-h8a7f3fd_0_cpython.conda',
+      '3.10': 'python-3.10.20-hea035f4_1_cpython.conda',
+      '3.11': 'python-3.11.15-hd04fa83_2_cpython.conda',
+      '3.12': 'python-3.12.13-hd04fa83_1_cpython.conda',
+      '3.13': 'python-3.13.15-hb3481d1_1_cp313t.conda',
+      '3.14': 'python-3.14.6-hcb74d6f_2_cp314t.conda',
+    },
+    'osx-arm64': {
+      '2.7': null, '3.5': null, '3.6': null, '3.7': null,
+      '3.8': 'python-3.8.20-h7d35d02_2_cpython.conda',
+      '3.9': 'python-3.9.23-h7139b31_0_cpython.conda',
+      '3.10': 'python-3.10.20-hac0b6dc_1_cpython.conda',
+      '3.11': 'python-3.11.15-hd1323d7_2_cpython.conda',
+      '3.12': 'python-3.12.13-hd1323d7_1_cpython.conda',
+      '3.13': 'python-3.13.15-hf1cfe1e_101_cp313.conda',
+      '3.14': 'python-3.14.6-hf4d206d_102_cp314.conda',
+    },
+  },
+  main: {
+    'win-64': {
+      '2.7': 'python-2.7.18-hfb89ab9_0.conda',
+      '3.5': 'python-3.5.6-he025d50_0.conda',
+      '3.6': 'python-3.6.13-h3758d61_0.conda',
+      '3.7': 'python-3.7.16-h6244533_0.conda',
+      '3.8': 'python-3.8.20-h8205438_0.conda',
+      '3.9': 'python-3.9.25-h716150d_1.conda',
+      '3.10': 'python-3.10.20-hb00fc5c_1.conda',
+      '3.11': 'python-3.11.15-hb00fc5c_1.conda',
+      '3.12': 'python-3.12.13-hd7b1df3_3.conda',
+      '3.13': 'python-3.13.15-h2e1fde4_102_cp313.conda',
+      '3.14': 'python-3.14.7-h7ce57fb_101_cp314.conda',
+    },
+    'linux-64': {
+      '2.7': 'python-2.7.18-ha1903f6_2.conda',
+      '3.5': 'python-3.5.6-hc3d631a_0.conda',
+      '3.6': 'python-3.6.13-hdb3f193_0.conda',
+      '3.7': 'python-3.7.16-h7a1cb2a_0.conda',
+      '3.8': 'python-3.8.20-he870216_0.conda',
+      '3.9': 'python-3.9.25-h0dcde21_1.conda',
+      '3.10': 'python-3.10.20-h741d88c_0.conda',
+      '3.11': 'python-3.11.15-h741d88c_0.conda',
+      '3.12': 'python-3.12.13-hc5f7cf0_3.conda',
+      '3.13': 'python-3.13.15-h9631c4f_102_cp313.conda',
+      '3.14': 'python-3.14.7-h863a04e_1_cp314t.conda',
+    },
+    'osx-64': {
+      '2.7': 'python-2.7.18-hc817775_0.conda',
+      '3.5': 'python-3.5.6-hc167b69_0.conda',
+      '3.6': 'python-3.6.13-h88f2d9e_0.conda',
+      '3.7': 'python-3.7.16-h218abb5_0.conda',
+      '3.8': 'python-3.8.20-hce00570_0.conda',
+      '3.9': 'python-3.9.23-hd8516d5_0.conda',
+      '3.10': 'python-3.10.18-hc958d9f_0.conda',
+      '3.11': 'python-3.11.13-hbff2529_0.conda',
+      '3.12': 'python-3.12.9-hcd54a6c_0.conda',
+      '3.13': 'python-3.13.5-h81a7116_100_cp313.conda',
+      '3.14': null,
+    },
+    'osx-arm64': {
+      '2.7': null, '3.5': null, '3.6': null, '3.7': null,
+      '3.8': 'python-3.8.20-hb885b13_0.conda',
+      '3.9': 'python-3.9.25-he39995d_1.conda',
+      '3.10': 'python-3.10.20-h4f1bc5c_0.conda',
+      '3.11': 'python-3.11.15-h4f1bc5c_0.conda',
+      '3.12': 'python-3.12.13-hd7e0f33_1.conda',
+      '3.13': 'python-3.13.15-hc2e2225_102_cp313.conda',
+      '3.14': 'python-3.14.7-hedc06ab_101_cp314.conda',
+    },
+  },
+};
 
 // 待检测的镜像源。defaults 指向各源 pkgs/main（Anaconda 官方仓库，受商业许可约束）；
 // cf 指向 conda-forge 频道（社区仓库，开源免费、授权规则不同）。
@@ -27,7 +135,7 @@ const MIRRORS = [
   { id: 'sjtug',    name: '上海交大 SJTU',            base: 'https://mirror.sjtu.edu.cn/anaconda/pkgs/main', cf: 'https://mirror.sjtu.edu.cn/anaconda/cloud/conda-forge' },
 ];
 
-const TIMEOUT = 12000;       // 单请求超时(秒→在 curl 里用 /1000)
+const TIMEOUT = 12000;       // 轻量探测（HEAD 请求）超时；不下载任何正文（repodata 与包都只发 HEAD），12s 足够
 
 // 探测日志：每次 /api/check 落盘到 logs/ 目录，便于事后排查「哪个源为啥下不到」
 const LOGS_DIR = path.join(ROOT, 'logs');
@@ -94,6 +202,7 @@ function probe(url, opts = {}) {
       '-w', '%{http_code}|%{content_type}|%{time_total}|%{size_download}|%{url_effective}|%{num_redirects}',
       '--max-time', String(TIMEOUT / 1000),
     ];
+    if (opts.head) args.push('-I');
     if (opts.range) args.push('-r', opts.range);
     args.push(url);
 
@@ -122,46 +231,7 @@ function probe(url, opts = {}) {
   });
 }
 
-// 下载 URL 的完整 body 到临时文件并返回元数据（用于 current_repodata.json 解析）。
-// body 落盘到 tmpFile，避免几 MB 的 JSON 撑爆 execFile 的 stdout 缓冲；-w 元数据走 stdout。
-// --compressed 让 curl 自动发 Accept-Encoding 并就地解压 gzip。
-function fetchJson(url, tmpFile) {
-  return new Promise((resolve) => {
-    const args = [
-      '-sSL', '--compressed', '-o', tmpFile,
-      '-w', '%{http_code}|%{content_type}|%{time_total}|%{size_download}|%{url_effective}|%{num_redirects}',
-      '--max-time', String(TIMEOUT / 1000),
-    ];
-    args.push(url);
-
-    let settled = false;
-    const done = (obj) => { if (settled) return; settled = true; clearTimeout(timer); resolve(obj); };
-    const timer = setTimeout(() => done({
-      ok: false, error: '超时', statusCode: null, contentType: '', finalUrl: url, latency: TIMEOUT, bytes: 0, numRedirects: 0, body: '',
-    }), TIMEOUT + 3000);
-
-    execFile('curl', args, { windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      let body = '';
-      try { body = fs.readFileSync(tmpFile, 'utf8'); } catch (_) { /* 无文件则 body 为空 */ }
-      fs.unlink(tmpFile, () => {}); // 清理临时文件（失败无害）
-
-      if (err) {
-        const raw = (stderr || err.message || 'curl 请求失败').toString().trim();
-        const m = raw.match(/curl:\s*\(\d+\)\s*(.*)/);
-        const friendly = m ? m[1].trim().slice(0, 90) : raw.replace(/^Command failed:\s*/, '').slice(0, 90);
-        return done({ ok: false, error: friendly, statusCode: null, contentType: '', finalUrl: url, latency: 0, bytes: 0, numRedirects: 0, body });
-      }
-      const p = String(stdout).trim().split('|');
-      const statusCode = p[0] ? parseInt(p[0], 10) : null;
-      const contentType = (p[1] || '').trim();
-      const latency = Math.round((parseFloat(p[2]) || 0) * 1000);
-      const bytes = parseInt(p[3], 10) || 0;
-      const finalUrl = p[4] || url;
-      const numRedirects = parseInt(p[5], 10) || 0;
-      done({ ok: true, statusCode, contentType, finalUrl, latency, bytes, numRedirects, body });
-    });
-  });
-}
+// fetchJson（下载完整 body 解析）已弃用：本工具改为纯 HEAD 探测，不再下载任何索引/包正文。
 
 // 从 "python-3.12.13-hd7b1df3_3.conda" 提取版本号 "3.12.13"
 function verOf(pkgName) {
@@ -193,28 +263,8 @@ function majorMinor(v) {
   return `${m[0]}.${m[1]}`;
 }
 
-// 从 repodata JSON 文本里解析出所有 python 包名，返回最新版本及对应包名。
-// conda 的 repodata 有 packages(.tar.bz2) 与 packages.conda(.conda) 两个区，都查。
-function parsePythonFromRepodata(body) {
-  try {
-    const obj = JSON.parse(body);
-    const names = [];
-    for (const section of ['packages', 'packages.conda']) {
-      const pkgs = obj[section];
-      if (pkgs && typeof pkgs === 'object') {
-        for (const key of Object.keys(pkgs)) {
-          if (/^python-\d+\.\d+\.\d+/.test(key)) names.push(key);
-        }
-      }
-    }
-    if (!names.length) return { latest: null, latestPkg: null, versions: [] };
-    names.sort((a, b) => cmpVersion(verOf(a), verOf(b)));
-    const latestPkg = names[names.length - 1];
-    return { latest: verOf(latestPkg), latestPkg, versions: names };
-  } catch (_) {
-    return { latest: null, latestPkg: null, versions: [] };
-  }
-}
+// parsePythonFromRepodata / matchPythonPkg / buildPythonNote 已弃用：探测不再解析索引，
+// 包的版本与文件名直接来自硬编码 PY_PKG 表（见上方），故无需从 repodata 解析。
 
 // 包是否可下载（200/206，且不是 HTML）
 function pkgGood(r) {
@@ -223,119 +273,111 @@ function pkgGood(r) {
   return false;
 }
 
-// 从 python 包名列表里，找主次版本号 == target（如 "3.12"）的包，返回其中 build 最新者。
-// 返回 null 表示该源没有这个主次版本。
-function matchPythonPkg(versions, targetPy) {
-  const t = majorMinor(String(targetPy || '3.12'));
-  let best = null, bestVer = '';
-  for (const n of versions || []) {
-    if (majorMinor(verOf(n)) === t) {
-      const v = verOf(n);
-      if (!best || cmpVersion(v, bestVer) > 0) { best = n; bestVer = v; }
-    }
-  }
-  return best;
+// matchPythonPkg 已弃用（见上方说明）。
+
+
+// buildPythonNote 已弃用（见上方说明）。
+
+
+// 归档版判定：python ≤ 3.5（含 2.7）视为历史归档包，很多国内镜像不主动同步
+function isArchivePy(py) {
+  return cmpMajorMinor(majorMinor(String(py || '3.12')), '3.5') <= 0;
 }
 
-// 生成版本对照备注：优先反映"该源是否有用户选的版本"
-function buildPythonNote(pyInfo, targetPy, matchedPkg) {
-  const t = String(targetPy || '3.12');
-  const latest = pyInfo.latest;
-  if (!latest) return '未解析到 python 包';
-  if (matchedPkg) return `python ${verOf(matchedPkg)} 已同步`;
-  const c = cmpMajorMinor(majorMinor(latest), t);
-  if (c > 0) return `无 ${t}（源最新 ${latest}，旧版可能已淘汰）`;
-  if (c < 0) return `无 ${t}（源最新 ${latest}，尚未同步）`;
-  return `最新 ${latest}`;
-}
+// synthPkgName 已弃用（见上方说明）。包名统一来自硬编码 PY_PKG 表。
 
 // 探测单个镜像的「某一个 channel」（defaults 或 conda-forge）。
-// 返回该 channel 下的完整子结果：索引/包/python版本/重定向代理信息。
-async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log) {
+// 简化方案（用户选定）：不下载任何正文，两步纯 HEAD：
+//   ① 索引：HEAD repodata.json（200/206 且非 HTML = 索引可达，不下载 270MB 大文件）。
+//   ② 包：HEAD 硬编码的 python 包名（PY_PKG[channelKey][platform][版本]，官方源核验真实存在）。
+//   判定：索引可达 + 包可达 = ok；仅其一 = partial；都无 = fail。
+//   归档版（python ≤ 3.5）：包未命中只标 partial，不因此判镜像 fail（很多镜像本就不同步历史归档包）。
+async function probeOneChannel(m, platform, targetPy, baseUrl, channelKey, channelLabel, log) {
   log({ step: 'start', mirror: m.id, channel: channelLabel, name: m.name });
+  const isArchive = isArchivePy(targetPy);
 
-  // ① 索引探测：先拉 current_repodata.json（conda 默认首选、约 1/7 体积、快），
-  //    失败（网络错 / 404 / 非 JSON）时回退 repodata.json（权威完整索引），对齐 conda 的 repodata_fns 行为。
-  let repodataFile = 'current_repodata.json';
-  const tmpA = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  let repodata = await fetchJson(`${baseUrl}/${platform}/${repodataFile}`, tmpA);
-  let repodataOk = false;
-  let pyInfo = { latest: null, latestPkg: null, versions: [] };
-  if (repodata.ok && (repodata.statusCode === 200 || repodata.statusCode === 206)) {
-    try { JSON.parse(repodata.body || '{}'); repodataOk = true; } catch (_) { /* 非 JSON → 索引不可用 */ }
-  }
-  // 回退：current 拿不到 → 试完整 repodata.json（用独立临时文件，避免与上面共享同一 tmp 触发竞态）
-  if (!repodataOk) {
-    repodataFile = 'repodata.json';
-    const fbUrl = `${baseUrl}/${platform}/${repodataFile}`;
-    const tmpB = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-    const fb = await fetchJson(fbUrl, tmpB);
-    const fbOk = fb.ok && (fb.statusCode === 200 || fb.statusCode === 206);
-    let fbParsed = false;
-    if (fbOk) { try { JSON.parse(fb.body || '{}'); fbParsed = true; } catch (_) { /* 仍非 JSON */ } }
-    if (fbParsed) { repodataOk = true; repodata = fb; }
-    log({ step: 'repodata-fallback', mirror: m.id, channel: channelLabel, url: fbUrl,
-          statusCode: fb.statusCode, ok: fbParsed, error: fb.error || null });
-  }
-  if (repodataOk) pyInfo = parsePythonFromRepodata(repodata.body);
+  // ① 索引：HEAD repodata.json（不下载正文）
+  const repoUrl = `${baseUrl}/${platform}/repodata.json`;
+  const repo = await probe(repoUrl, { head: true });
+  const repodataOk = repo.ok && (repo.statusCode === 200 || repo.statusCode === 206) && !/html/.test(repo.contentType || '');
 
-  // A. 重定向 / 代理检测：repodata 探测若发生跨域跳转（如 ustc→nju），
-  //    说明该源自身未托管、只是代理到别的镜像。curl -sSL 会静默跟随，
-  //    所以必须显式暴露 finalUrl / numRedirects，否则会把代理误报成「源本身可用」。
+  // 重定向 / 代理检测：repodata HEAD 若发生跨域跳转（如 ustc→nju），说明源自身未托管、只是代理。
   const srcHost = (() => { try { return new URL(baseUrl).host; } catch (_) { return ''; } })();
-  const dstHost = (() => { try { return new URL(repodata.finalUrl || baseUrl).host; } catch (_) { return ''; } })();
-  const redirected = (repodata.numRedirects || 0) > 0;
+  const dstHost = (() => { try { return new URL(repo.finalUrl || baseUrl).host; } catch (_) { return ''; } })();
+  const redirected = (repo.numRedirects || 0) > 0;
   const isProxy = redirected && dstHost && srcHost && dstHost !== srcHost;
-  const proxyTarget = isProxy ? repodata.finalUrl : null;
+  const proxyTarget = isProxy ? repo.finalUrl : null;
   const proxyNote = isProxy
     ? `源为跳转代理，实际指向 ${dstHost}`
     : (redirected ? `已内部重定向（${dstHost}）` : null);
 
   log({
-    step: 'repodata', mirror: m.id, channel: channelLabel, url: `${baseUrl}/${platform}/${repodataFile}`,
-    statusCode: repodata.statusCode, contentType: repodata.contentType,
-    latency: repodata.latency, bytes: repodata.bytes, ok: repodataOk,
-    error: repodata.error || null, finalUrl: repodata.finalUrl,
-    numRedirects: repodata.numRedirects, redirected: isProxy,
-    file: repodataFile, fellBack: repodataFile !== 'current_repodata.json',
+    step: 'repodata', mirror: m.id, channel: channelLabel, url: repoUrl,
+    statusCode: repo.statusCode, contentType: repo.contentType,
+    latency: repo.latency, bytes: repo.bytes, ok: repodataOk,
+    error: repo.error || null, finalUrl: repo.finalUrl,
+    numRedirects: repo.numRedirects, redirected: isProxy,
+    file: 'repodata.json', onlyHead: true, parsed: false,
   });
-  log({ step: 'parse', mirror: m.id, channel: channelLabel, pythonLatest: pyInfo.latest, pkgCount: pyInfo.versions.length });
 
-  // ② 探测包优先匹配用户选择的版本；该源没有该版本时回退用最新版包（仍能反映下载能力）
-  const matchedPkg = matchPythonPkg(pyInfo.versions, targetPy);
-  const pkgName = matchedPkg || pyInfo.latestPkg || PKG_FALLBACK;
-  const pkgUrl = `${baseUrl}/${platform}/${pkgName}`;
-  const pkg = await probe(pkgUrl, { range: '0-1023' });
+  // ② 包：从硬编码表取真实包名，HEAD 它
+  const minor = majorMinor(String(targetPy || '3.12'));
+  const pkgName = (PY_PKG[channelKey] && PY_PKG[channelKey][platform] && PY_PKG[channelKey][platform][minor]) || null;
+  let pkg;
+  if (pkgName) {
+    const pkgUrl = `${baseUrl}/${platform}/${pkgName}`;
+    pkg = await probe(pkgUrl, { head: true });
+  } else {
+    pkg = { ok: false, statusCode: null, contentType: '', latency: 0, bytes: 0,
+      error: `无硬编码包名（${channelLabel} ${platform} python ${targetPy} 不在精简索引）`, finalUrl: '', numRedirects: 0 };
+  }
   const pkgOk = pkgGood(pkg);
+  // 包重定向（302 跳官方）→ 视作该镜像不含此包，不误升状态
+  const pkgRedirected = (pkg.numRedirects || 0) > 0 && !(pkg.statusCode === 200 || pkg.statusCode === 206);
 
   log({
-    step: 'pkg', mirror: m.id, channel: channelLabel, url: pkgUrl, pkgName,
+    step: 'pkg', mirror: m.id, channel: channelLabel, url: pkgName ? `${baseUrl}/${platform}/${pkgName}` : '', pkgName,
     statusCode: pkg.statusCode, contentType: pkg.contentType,
     latency: pkg.latency, bytes: pkg.bytes, ok: pkgOk, error: pkg.error || null,
+    nameSynthesized: false, redirected: (pkg.numRedirects || 0) > 0,
   });
 
-  // ③ 版本对照备注
-  const pythonNote = buildPythonNote(pyInfo, targetPy, matchedPkg);
+  // ③ 版本对照备注（区分归档版）
+  let pythonNote;
+  if (isArchive) {
+    if (pkgOk) pythonNote = `【归档包】python ${targetPy} 已同步`;
+    else if (!pkgName) pythonNote = `【归档包】python ${targetPy} 无硬编码包名，跳过包探测`;
+    else pythonNote = `【归档包】python ${targetPy} 未命中（部分镜像不含历史归档包，不代表镜像失效）`;
+  } else {
+    if (pkgName && pkgOk) pythonNote = `python ${targetPy} 包可达`;
+    else if (pkgName && !pkgOk) {
+      if (repodataOk) pythonNote = `python ${targetPy} 包 ${pkg.statusCode != null ? pkg.statusCode : '不可达'}（索引可达，但包 HEAD 未通过）`;
+      else pythonNote = `python ${targetPy} 包 ${pkg.statusCode != null ? pkg.statusCode : '不可达'}（索引 HEAD 也未通过，镜像可能整体不可达）`;
+    } else pythonNote = `python ${targetPy} 无硬编码包名，仅验证索引可达`;
+  }
+  if (pkgRedirected) pythonNote += '（包跳转代理/官方，镜像不含此包）';
 
-  // ④ 状态：索引 + 包 + 版本齐备才算 ok；索引与包可用但缺目标版本 → partial
+  // ④ 状态
   let status = 'fail';
-  if (repodataOk && pkgOk && matchedPkg) status = 'ok';
+  if (repodataOk && pkgOk) status = 'ok';
   else if (repodataOk || pkgOk) status = 'partial';
+  if (isArchive && repodataOk && !pkgOk) status = 'partial';
 
-  log({ step: 'result', mirror: m.id, channel: channelLabel, status, pythonNote, repodataOk, pkgOk, matched: !!matchedPkg, proxy: isProxy });
+  log({ step: 'result', mirror: m.id, channel: channelLabel, status, pythonNote, repodataOk, pkgOk, matched: !!pkgName, proxy: isProxy, isArchive });
 
   return {
-    repodataFile,
+    repodataFile: 'repodata.json',
+    repodataParsed: false,
     repodata: {
-      statusCode: repodata.statusCode, contentType: repodata.contentType,
-      latency: repodata.latency, error: repodata.error || null,
-      isHtml: /html/.test(repodata.contentType || ''),
-      finalUrl: repodata.finalUrl, numRedirects: repodata.numRedirects,
+      statusCode: repo.statusCode, contentType: repo.contentType,
+      latency: repo.latency, error: repo.error || null,
+      isHtml: /html/.test(repo.contentType || ''),
+      finalUrl: repo.finalUrl, numRedirects: repo.numRedirects,
     },
     pkg: { statusCode: pkg.statusCode, contentType: pkg.contentType, latency: pkg.latency, error: pkg.error || null },
-    pythonLatest: pyInfo.latest, pythonPkg: pkgName, pythonNote,
-    repodataOk, pkgOk, status,
-    latency: Math.max(repodata.latency || 0, pkg.latency || 0),
+    pythonLatest: targetPy, pythonPkg: pkgName, pythonNote,
+    repodataOk, pkgOk, status, isArchive, nameSynthesized: false,
+    latency: Math.max(repo.latency || 0, pkg.latency || 0),
     redirected: isProxy, proxyTarget, proxyNote,
   };
 }
@@ -343,12 +385,12 @@ async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log
 // 探测单个镜像（按 channel 参数：defaults / conda-forge / both）
 async function checkMirror(m, platform, targetPy, channel, log) {
   if (channel === 'conda-forge') {
-    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'conda-forge', log);
+    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'cf', 'conda-forge', log);
     return { id: m.id, name: m.name, base: m.cf, channel, ...c };
   }
   if (channel === 'both') {
-    const d = await probeOneChannel(m, platform, targetPy, m.base, 'defaults', log);
-    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'conda-forge', log);
+    const d = await probeOneChannel(m, platform, targetPy, m.base, 'main', 'defaults', log);
+    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'cf', 'conda-forge', log);
     // 两个频道任一可用即不算全挂；都可用才算 ok，否则 partial
     const status = (d.status === 'ok' || c.status === 'ok')
       ? ((d.status === 'ok' && c.status === 'ok') ? 'ok' : 'partial')
@@ -363,7 +405,7 @@ async function checkMirror(m, platform, targetPy, channel, log) {
     };
   }
   // 默认 defaults
-  const d = await probeOneChannel(m, platform, targetPy, m.base, 'defaults', log);
+  const d = await probeOneChannel(m, platform, targetPy, m.base, 'main', 'defaults', log);
   return { id: m.id, name: m.name, base: m.base, channel: 'defaults', ...d };
 }
 

@@ -41,6 +41,22 @@ function label(s) {
   return s === 'ok' ? '✅ 可用' : s === 'partial' ? '⚠️ 部分' : s === 'deprecated' ? '🗑️ 废弃' : '❌ 故障';
 }
 
+// both 模式下的「通道可用性」派生标签（由实时探测结果决定，不依赖静态字段）：
+//   defaults 与 conda-forge 任一通道若发生跨域跳转代理（redirected），视为该通道非本源自托管，
+//   不计入「全通道可用」。四类结果覆盖用户建议的三种状态，并补对称的「仅官方源可用」。
+function statusLabel(m) {
+  if (m.channel === 'both' && m.channels) {
+    const d = m.channels.defaults, c = m.channels.condaforge;
+    const dOk = d.status === 'ok' && !d.redirected;
+    const cOk = c.status === 'ok' && !c.redirected;
+    if (dOk && cOk) return { cls: 'ok', text: '✅ 全通道可用' };
+    if (cOk && !dOk) return { cls: 'partial', text: '⚠️ 仅社区源可用' };
+    if (dOk && !cOk) return { cls: 'partial', text: '⚠️ 仅官方源可用' };
+    return { cls: 'fail', text: '❌ 源失效' };
+  }
+  return { cls: m.status, text: label(m.status) };
+}
+
 // 渲染未检测列表（页面初始状态）
 function renderPending(mirrors) {
   tbody.innerHTML = '';
@@ -72,7 +88,8 @@ function upsertRow(m) {
     tr.dataset.id = m.id;
     tbody.appendChild(tr);
   }
-  tr.className = m.status;
+  const info = statusLabel(m);
+  tr.className = info.cls;
   const proxyBadge = m.redirected ? '<span class="badge proxy">↪代理</span>' : '';
   const archiveBadge = m.isArchive ? '<span class="badge archive">归档包</span>' : '';
   const deprecatedBadge = m.deprecated ? '<span class="badge deprecated">已废弃</span>' : '';
@@ -81,7 +98,7 @@ function upsertRow(m) {
     <td>${fmtRepo(m)}</td>
     <td>${fmt(m.pkg)}</td>
     <td>${m.latency}ms</td>
-    <td><span class="badge ${m.status}">${label(m.status)}</span></td>
+    <td><span class="badge ${info.cls}">${info.text}</span></td>
     <td class="note">${note(m)}</td>
   `;
 }

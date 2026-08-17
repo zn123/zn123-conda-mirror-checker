@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 在浏览器里以表格展示 conda 镜像源的状态（绿 / 黄 / 红）；默认启用 7 个，中科大 USTC、网易 163 因稳定性默认在 `server.js` 的 `MIRRORS` 中注释禁用，取消对应注释即可纳入探测。
+- 在浏览器里以表格展示 conda 镜像源的状态（绿 / 黄 / 红）；默认启用 7 个，中科大 USTC、网易 163 标记为 `deprecated`——**仅显示、不参与探测**（界面标注「已废弃」）。
 - 每个镜像做两步纯 HEAD 探测（不下载任何正文）：
   1. **第一步·索引**：对 `repodata.json` 发 HTTP HEAD——返回 200/206 且非 HTML 即「索引可达」（不下载约 270MB 的完整索引，彻底规避公网大文件限流/长连接超时导致的假 fail）。
   2. **第二步·包**：对**硬编码的 python 包名**（见「实现要点」）发 HTTP HEAD——返回 200/206 即「包可达」。
@@ -123,20 +123,20 @@ zn123_conda_test/
 | official | 官方 repo.anaconda.com | https://repo.anaconda.com/pkgs/main |
 | bfsu | 北京外国语 BFSU | https://mirrors.bfsu.edu.cn/anaconda/pkgs/main |
 | tuna | 清华大学 tuna | https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main |
-| ustc | 中科大 USTC（跳转代理，默认禁用） | https://mirrors.ustc.edu.cn/anaconda/pkgs/main |
+| ustc | 中科大 USTC（已废弃，仅显示） | https://mirrors.ustc.edu.cn/anaconda/pkgs/main |
 | nju | 南京大学 NJU | https://mirror.nju.edu.cn/anaconda/pkgs/main |
 | aliyun | 阿里云 | https://mirrors.aliyun.com/anaconda/pkgs/main |
-| netease | 网易 163（疑似失效，默认禁用） | https://mirrors.163.com/anaconda/pkgs/main |
+| netease | 网易 163（已废弃，仅显示） | https://mirrors.163.com/anaconda/pkgs/main |
 | huawei | 华为云 | https://mirrors.huaweicloud.com/anaconda/pkgs/main |
-| sjtug | 上海交大 SJTU | https://mirrors.sjtug.sjtu.edu.cn/anaconda/pkgs/main |
+| sjtug | 上海交大 SJTU | https://mirror.sjtu.edu.cn/anaconda/pkgs/main |
 
 > 每个源还有独立的 `conda-forge` 频道地址（`cloud/conda-forge` 或官方源的 `conda.anaconda.org/conda-forge`），由 `channel=conda-forge` / `both` 触发探测。
 >
-> 注：上表中**中科大 USTC、网易 163 默认在 `server.js` 的 `MIRRORS` 中被注释禁用**，不参与实际探测（故实际默认探测 7 个）；如需纳入，取消对应注释即可。
+> 注：上表中**中科大 USTC、网易 163 标记 `deprecated: true`，仅显示、不参与探测**（故实际默认探测 7 个）；如需恢复探测，去掉对应对象的 `deprecated` 字段即可。
 >
 > 阿里云的 conda-forge 地址 `https://mirrors.aliyun.com/anaconda/cloud/conda-forge` 可能已随阿里云镜像调整而下线（实测返回 404）；若需保留阿里云，请以阿里云最新镜像文档为准更新 `MIRRORS` 中 `cf` 字段，工具会如实显示 404。
 
-要增删镜像，编辑 `server.js` 顶部的 `MIRRORS` 数组即可。
+要增删/调整镜像，编辑 `mirrors.js` 中的 `MIRRORS` 数组即可（`server.js` 通过 `require('./mirrors.js')` 读取，无需改动后端逻辑）。某源想「只显示、不探测」，加 `deprecated: true` 字段即可；彻底移除则删除对应对象。
 
 ## 实现要点（踩过的坑）
 

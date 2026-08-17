@@ -7,9 +7,18 @@ function fmt(r) {
   return `${r.statusCode ?? '—'} · ${r.latency ?? 0}ms`;
 }
 
+function short(s) {
+  return s === 'ok' ? '可用' : s === 'partial' ? '部分' : '故障';
+}
+
 function note(m) {
   const notes = [];
   if (m.pythonNote) notes.push(m.pythonNote);
+  if (m.proxyNote) notes.push('↪ ' + m.proxyNote);
+  if (m.channels) {
+    const d = m.channels.defaults, c = m.channels.condaforge;
+    notes.push(`defaults:${short(d.status)} / conda-forge:${short(c.status)}`);
+  }
   if (m.repodata.isHtml) notes.push('返回网页门户（非 conda 索引）');
   if (m.repodata.statusCode === 404) notes.push('索引 404');
   if (m.pkg.statusCode === 502) notes.push('包下载 502（后端故障）');
@@ -53,8 +62,9 @@ function upsertRow(m) {
     tbody.appendChild(tr);
   }
   tr.className = m.status;
+  const proxyBadge = m.redirected ? '<span class="badge proxy">↪代理</span>' : '';
   tr.innerHTML = `
-    <td class="name">${m.name}<div class="base">${m.base}</div></td>
+    <td class="name">${m.name}${proxyBadge}<div class="base">${m.base}</div></td>
     <td>${fmt(m.repodata)}</td>
     <td>${fmt(m.pkg)}</td>
     <td>${m.latency}ms</td>
@@ -113,6 +123,7 @@ let lastLogs = [];
 function check() {
   const platform = $('#platform').value;
   const py = $('#python').value;
+  const channel = $('#channel').value;
   if (es) es.close();
 
   $('#logBody').innerHTML = '';
@@ -122,9 +133,14 @@ function check() {
   $('#status').textContent = '检测中…';
   $('#checkBtn').disabled = true;
 
-  es = new EventSource(`/api/check?platform=${encodeURIComponent(platform)}&python=${encodeURIComponent(py)}`);
+  es = new EventSource(`/api/check?platform=${encodeURIComponent(platform)}&python=${encodeURIComponent(py)}&channel=${encodeURIComponent(channel)}`);
 
-  es.addEventListener('meta', () => {});
+  es.addEventListener('meta', (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      $('#summary').textContent = `频道=${d.channel} · 平台=${d.platform} · python=${d.python} · 检测中…`;
+    } catch (_) {}
+  });
   es.addEventListener('mirror', (ev) => {
     try { upsertRow(JSON.parse(ev.data)); } catch (_) {}
   });
@@ -141,6 +157,7 @@ function check() {
       const d = JSON.parse(ev.data);
       $('#summary').textContent =
         `可用 ${d.summary.ok} · 部分 ${d.summary.partial} · 故障 ${d.summary.fail}（共 ${d.summary.total}）`;
+      if (d.compliance) $('#compliance').textContent = d.compliance;
     } catch (_) {}
     $('#status').textContent = '';
     $('#checkBtn').disabled = false;

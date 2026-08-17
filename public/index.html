@@ -31,6 +31,13 @@
         <option value="3.8">3.8</option>
       </select>
     </label>
+    <label>频道：
+      <select id="channel">
+        <option value="defaults" selected>defaults（官方）</option>
+        <option value="conda-forge">conda-forge（社区）</option>
+        <option value="both">两者都测</option>
+      </select>
+    </label>
     <button id="checkBtn">开始检测</button>
     <span id="status" class="status"></span>
     <span id="summary" class="summary"></span>
@@ -62,6 +69,7 @@
 
   <footer>
     <p>探测逻辑：① 完整拉取 <code>current_repodata.json</code> 验证是否为合法 JSON，并解析该源 python 的真实版本与包名；② 对该真实包发 Range 请求验证可下载（命中 502 / 403 / HTML 门户即判故障）；③ 对照你选择的 Python 版本，标注该源是否已同步。</p>
+    <p class="compliance" id="compliance">defaults 频道（Anaconda 官方仓库）受 Anaconda 商业许可约束：≥200 人组织的商业使用需购买授权，教育/个人/&lt;200 人可免费。合规敏感场景建议改用 conda-forge 频道（micromamba / miniforge），不受该许可约束。</p>
   </footer>
 
   <script src="/app.js"></script>

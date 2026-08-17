@@ -11,16 +11,20 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 // 兜底包名：仅在 repodata 解析失败、拿不到真实包名时使用（win-64 的 python 3.12.13 build）
 const PKG_FALLBACK = 'python-3.12.13-hd7b1df3_3.conda';
 
-// 待检测的镜像源（base 指向各源的 pkgs/main 频道）
+// 待检测的镜像源。defaults 指向各源 pkgs/main（Anaconda 官方仓库，受商业许可约束）；
+// cf 指向 conda-forge 频道（社区仓库，开源免费、授权规则不同）。
+// 官方源 repo.anaconda.com 不托管 conda-forge，其 cf 走独立域名 conda.anaconda.org。
+// ustc 实际不再自维护 defaults，会 302 跳转代理到南京大学 NJU（运行时由重定向检测标注）。
 const MIRRORS = [
-  { id: 'official', name: '官方 repo.anaconda.com', base: 'https://repo.anaconda.com/pkgs/main' },
-  { id: 'bfsu',     name: '北京外国语 BFSU',          base: 'https://mirrors.bfsu.edu.cn/anaconda/pkgs/main' },
-  { id: 'tuna',     name: '清华大学 tuna',            base: 'https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main' },
-  { id: 'ustc',     name: '中科大 USTC',              base: 'https://mirrors.ustc.edu.cn/anaconda/pkgs/main' },
-  { id: 'aliyun',   name: '阿里云',                   base: 'https://mirrors.aliyun.com/anaconda/pkgs/main' },
-  { id: 'netease',  name: '网易 163',                 base: 'https://mirrors.163.com/anaconda/pkgs/main' },
-  { id: 'huawei',   name: '华为云',                   base: 'https://mirrors.huaweicloud.com/anaconda/pkgs/main' },
-  { id: 'sjtug',    name: '上海交大 SJTU',            base: 'https://mirrors.sjtug.sjtu.edu.cn/anaconda/pkgs/main' },
+  { id: 'official', name: '官方 repo.anaconda.com', base: 'https://repo.anaconda.com/pkgs/main',        cf: 'https://conda.anaconda.org/conda-forge' },
+  { id: 'bfsu',     name: '北京外国语 BFSU',          base: 'https://mirrors.bfsu.edu.cn/anaconda/pkgs/main',  cf: 'https://mirrors.bfsu.edu.cn/anaconda/cloud/conda-forge' },
+  { id: 'tuna',     name: '清华大学 tuna',            base: 'https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main', cf: 'https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge' },
+  { id: 'ustc',     name: '中科大 USTC（跳转代理）',  base: 'https://mirrors.ustc.edu.cn/anaconda/pkgs/main',  cf: 'https://mirrors.ustc.edu.cn/anaconda/cloud/conda-forge' },
+  { id: 'nju',      name: '南京大学 NJU',             base: 'https://mirror.nju.edu.cn/anaconda/pkgs/main',  cf: 'https://mirror.nju.edu.cn/anaconda/cloud/conda-forge' },
+  { id: 'aliyun',   name: '阿里云',                   base: 'https://mirrors.aliyun.com/anaconda/pkgs/main',   cf: 'https://mirrors.aliyun.com/anaconda/cloud/conda-forge' },
+  { id: 'netease',  name: '网易 163（疑似失效）',     base: 'https://mirrors.163.com/anaconda/pkgs/main',     cf: 'https://mirrors.163.com/anaconda/cloud/conda-forge' },
+  { id: 'huawei',   name: '华为云',                   base: 'https://mirrors.huaweicloud.com/anaconda/pkgs/main', cf: 'https://mirrors.huaweicloud.com/anaconda/cloud/conda-forge' },
+  { id: 'sjtug',    name: '上海交大 SJTU',            base: 'https://mirrors.sjtug.sjtu.edu.cn/anaconda/pkgs/main', cf: 'https://mirrors.sjtug.sjtu.edu.cn/anaconda/cloud/conda-forge' },
 ];
 
 const TIMEOUT = 12000;       // 单请求超时(秒→在 curl 里用 /1000)
@@ -67,10 +71,10 @@ function fmtLogEntry(e) {
 }
 
 // 把一次完整请求的所有日志写入 logs/requests-<ts>-<reqId>.log
-function writeLogFile(reqId, platform, targetPy, summary, logs) {
+function writeLogFile(reqId, platform, targetPy, channel, summary, logs) {
   const file = path.join(LOGS_DIR, `requests-${reqId}.log`);
   const lines = [
-    `reqId=${reqId} platform=${platform} python=${targetPy}`,
+    `reqId=${reqId} platform=${platform} python=${targetPy} channel=${channel}`,
     `summary= ok:${summary.ok} partial:${summary.partial} fail:${summary.fail} total:${summary.total}`,
     '---',
   ];
@@ -245,12 +249,13 @@ function buildPythonNote(pyInfo, targetPy, matchedPkg) {
   return `最新 ${latest}`;
 }
 
-async function checkMirror(m, platform, targetPy, log) {
-  const repodataUrl = `${m.base}/${platform}/current_repodata.json`;
-  log({ step: 'start', mirror: m.id, name: m.name });
+// 探测单个镜像的「某一个 channel」（defaults 或 conda-forge）。
+// 返回该 channel 下的完整子结果：索引/包/python版本/重定向代理信息。
+async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log) {
+  const repodataUrl = `${baseUrl}/${platform}/current_repodata.json`;
+  log({ step: 'start', mirror: m.id, channel: channelLabel, name: m.name });
 
   // ① 完整下载 current_repodata.json 并解析出该源 python 的真实版本与包名。
-  //    能解析出合法 JSON 索引即视为"索引可用"。
   const tmpFile = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
   const repodata = await fetchJson(repodataUrl, tmpFile);
 
@@ -261,23 +266,36 @@ async function checkMirror(m, platform, targetPy, log) {
   }
   if (repodataOk) pyInfo = parsePythonFromRepodata(repodata.body);
 
+  // A. 重定向 / 代理检测：repodata 探测若发生跨域跳转（如 ustc→nju），
+  //    说明该源自身未托管、只是代理到别的镜像。curl -sSL 会静默跟随，
+  //    所以必须显式暴露 finalUrl / numRedirects，否则会把代理误报成「源本身可用」。
+  const srcHost = (() => { try { return new URL(baseUrl).host; } catch (_) { return ''; } })();
+  const dstHost = (() => { try { return new URL(repodata.finalUrl || baseUrl).host; } catch (_) { return ''; } })();
+  const redirected = (repodata.numRedirects || 0) > 0;
+  const isProxy = redirected && dstHost && srcHost && dstHost !== srcHost;
+  const proxyTarget = isProxy ? repodata.finalUrl : null;
+  const proxyNote = isProxy
+    ? `源为跳转代理，实际指向 ${dstHost}`
+    : (redirected ? `已内部重定向（${dstHost}）` : null);
+
   log({
-    step: 'repodata', mirror: m.id, url: repodataUrl,
+    step: 'repodata', mirror: m.id, channel: channelLabel, url: repodataUrl,
     statusCode: repodata.statusCode, contentType: repodata.contentType,
     latency: repodata.latency, bytes: repodata.bytes, ok: repodataOk,
-    error: repodata.error || null,
+    error: repodata.error || null, finalUrl: repodata.finalUrl,
+    numRedirects: repodata.numRedirects, redirected: isProxy,
   });
-  log({ step: 'parse', mirror: m.id, pythonLatest: pyInfo.latest, pkgCount: pyInfo.versions.length });
+  log({ step: 'parse', mirror: m.id, channel: channelLabel, pythonLatest: pyInfo.latest, pkgCount: pyInfo.versions.length });
 
   // ② 探测包优先匹配用户选择的版本；该源没有该版本时回退用最新版包（仍能反映下载能力）
   const matchedPkg = matchPythonPkg(pyInfo.versions, targetPy);
   const pkgName = matchedPkg || pyInfo.latestPkg || PKG_FALLBACK;
-  const pkgUrl = `${m.base}/${platform}/${pkgName}`;
+  const pkgUrl = `${baseUrl}/${platform}/${pkgName}`;
   const pkg = await probe(pkgUrl, { range: '0-1023' });
   const pkgOk = pkgGood(pkg);
 
   log({
-    step: 'pkg', mirror: m.id, url: pkgUrl, pkgName,
+    step: 'pkg', mirror: m.id, channel: channelLabel, url: pkgUrl, pkgName,
     statusCode: pkg.statusCode, contentType: pkg.contentType,
     latency: pkg.latency, bytes: pkg.bytes, ok: pkgOk, error: pkg.error || null,
   });
@@ -290,23 +308,48 @@ async function checkMirror(m, platform, targetPy, log) {
   if (repodataOk && pkgOk && matchedPkg) status = 'ok';
   else if (repodataOk || pkgOk) status = 'partial';
 
-  const result = {
-    id: m.id, name: m.name, base: m.base,
+  log({ step: 'result', mirror: m.id, channel: channelLabel, status, pythonNote, repodataOk, pkgOk, matched: !!matchedPkg, proxy: isProxy });
+
+  return {
     repodata: {
       statusCode: repodata.statusCode, contentType: repodata.contentType,
       latency: repodata.latency, error: repodata.error || null,
       isHtml: /html/.test(repodata.contentType || ''),
+      finalUrl: repodata.finalUrl, numRedirects: repodata.numRedirects,
     },
-    pkg: {
-      statusCode: pkg.statusCode, contentType: pkg.contentType,
-      latency: pkg.latency, error: pkg.error || null,
-    },
+    pkg: { statusCode: pkg.statusCode, contentType: pkg.contentType, latency: pkg.latency, error: pkg.error || null },
     pythonLatest: pyInfo.latest, pythonPkg: pkgName, pythonNote,
     repodataOk, pkgOk, status,
     latency: Math.max(repodata.latency || 0, pkg.latency || 0),
+    redirected: isProxy, proxyTarget, proxyNote,
   };
-  log({ step: 'result', mirror: m.id, status, pythonNote, repodataOk, pkgOk, matched: !!matchedPkg });
-  return result;
+}
+
+// 探测单个镜像（按 channel 参数：defaults / conda-forge / both）
+async function checkMirror(m, platform, targetPy, channel, log) {
+  if (channel === 'conda-forge') {
+    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'conda-forge', log);
+    return { id: m.id, name: m.name, base: m.cf, channel, ...c };
+  }
+  if (channel === 'both') {
+    const d = await probeOneChannel(m, platform, targetPy, m.base, 'defaults', log);
+    const c = await probeOneChannel(m, platform, targetPy, m.cf, 'conda-forge', log);
+    // 两个频道任一可用即不算全挂；都可用才算 ok，否则 partial
+    const status = (d.status === 'ok' || c.status === 'ok')
+      ? ((d.status === 'ok' && c.status === 'ok') ? 'ok' : 'partial')
+      : 'fail';
+    return {
+      id: m.id, name: m.name, base: m.base, channel,
+      ...d, status, pythonNote: d.pythonNote,
+      channels: {
+        defaults: { status: d.status, pythonNote: d.pythonNote, repodataOk: d.repodataOk, pkgOk: d.pkgOk, redirected: d.redirected },
+        condaforge: { status: c.status, pythonNote: c.pythonNote, repodataOk: c.repodataOk, pkgOk: c.pkgOk, redirected: c.redirected },
+      },
+    };
+  }
+  // 默认 defaults
+  const d = await probeOneChannel(m, platform, targetPy, m.base, 'defaults', log);
+  return { id: m.id, name: m.name, base: m.base, channel: 'defaults', ...d };
 }
 
 const MIME = {
@@ -336,7 +379,7 @@ const server = http.createServer(async (req, res) => {
   if (u === '/api/mirrors') {
     // 仅返回镜像源列表（不探测），供页面初始展示
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ mirrors: MIRRORS.map(({ id, name, base }) => ({ id, name, base })) }));
+    res.end(JSON.stringify({ mirrors: MIRRORS.map(({ id, name, base, cf }) => ({ id, name, base, cf })) }));
     return;
   }
 
@@ -344,6 +387,7 @@ const server = http.createServer(async (req, res) => {
     const q = new URL(req.url, 'http://localhost').searchParams;
     const platform = q.get('platform') || 'win-64';
     const targetPy = q.get('python') || '3.12';
+    const channel = ['defaults', 'conda-forge', 'both'].includes(q.get('channel')) ? q.get('channel') : 'defaults';
 
     // 改为 SSE：实时逐条推送探测日志(log) + 每源完成推结果(mirror) + 结束推 done
     res.writeHead(200, {
@@ -356,18 +400,18 @@ const server = http.createServer(async (req, res) => {
 
     const reqId = `${tsStamp()}-${Math.random().toString(36).slice(2, 8)}`;
     const logger = makeLogger(res);
-    logger({ step: 'request', reqId, platform, python: targetPy });
-    res.write(`event: meta\ndata: ${JSON.stringify({ platform, python: targetPy, reqId })}\n\n`);
+    logger({ step: 'request', reqId, platform, python: targetPy, channel });
+    res.write(`event: meta\ndata: ${JSON.stringify({ platform, python: targetPy, channel, reqId })}\n\n`);
 
     const results = [];
-    await Promise.all(MIRRORS.map((m) => checkMirror(m, platform, targetPy, logger)
+    await Promise.all(MIRRORS.map((m) => checkMirror(m, platform, targetPy, channel, logger)
       .then((r) => {
         results.push(r);
         res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
       })
       .catch((e) => {
         const r = {
-          id: m.id, name: m.name, base: m.base,
+          id: m.id, name: m.name, base: m.base, channel,
           repodata: { statusCode: null, contentType: '', latency: 0, error: String((e && e.message) || e), isHtml: false },
           pkg: { statusCode: null, contentType: '', latency: 0, error: null },
           pythonLatest: null, pythonPkg: null, pythonNote: '探测异常',
@@ -383,9 +427,11 @@ const server = http.createServer(async (req, res) => {
       fail: results.filter((r) => r.status === 'fail').length,
       total: results.length,
     };
-    const logFile = writeLogFile(reqId, platform, targetPy, summary, logger.all);
+    // D. 合规提示：defaults 频道受 Anaconda 商业许可约束，conda-forge 不受限
+    const compliance = 'defaults 频道（Anaconda 官方仓库）受 Anaconda 商业许可约束：≥200 人组织的商业使用需购买授权，教育/个人/<200 人可免费。合规敏感场景建议改用 conda-forge 频道（micromamba / miniforge），不受该许可约束。';
+    const logFile = writeLogFile(reqId, platform, targetPy, channel, summary, logger.all);
     logger({ step: 'done', reqId, logFile, summary });
-    res.write(`event: done\ndata: ${JSON.stringify({ summary, reqId, logFile })}\n\n`);
+    res.write(`event: done\ndata: ${JSON.stringify({ summary, reqId, logFile, compliance, channel })}\n\n`);
     res.end();
     return;
   }

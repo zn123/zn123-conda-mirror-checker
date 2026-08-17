@@ -96,6 +96,7 @@ tr.pending td:first-child { border-left: 4px solid #cbd5e1; }
 .badge.partial { background: #fef3c7; color: #b45309; }
 .badge.fail { background: #fee2e2; color: #b91c1c; }
 .badge.pending { background: #f1f5f9; color: #64748b; }
+.badge.proxy { background: #e0e7ff; color: #4338ca; margin-left: 6px; }
 
 footer {
   padding: 16px 28px 32px;
@@ -107,6 +108,15 @@ footer code {
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 12px;
+}
+footer .compliance {
+  margin-top: 8px;
+  color: #475569;
+  background: #f8fafc;
+  border-left: 3px solid #cbd5e1;
+  padding: 6px 10px;
+  border-radius: 4px;
+  line-height: 1.6;
 }
 
 /* 探测日志面板 */

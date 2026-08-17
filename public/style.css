@@ -79,6 +79,12 @@ td .base {
   word-break: break-all;
 }
 td.note { color: #64748b; font-size: 13px; }
+.idx-file {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.idx-file::before { content: '索引: '; color: #cbd5e1; }
 
 tr.ok td:first-child { border-left: 4px solid #22c55e; }
 tr.partial td:first-child { border-left: 4px solid #f59e0b; }

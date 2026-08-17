@@ -7,6 +7,15 @@ function fmt(r) {
   return `${r.statusCode ?? '—'} · ${r.latency ?? 0}ms`;
 }
 
+// 索引单元格：在状态码后标注实际探测的索引文件（current_repodata.json / 回退 repodata.json）
+function fmtRepo(m) {
+  const base = fmt(m.repodata);
+  const fellBack = m.repodataFile === 'repodata.json';
+  const file = fellBack ? 'repodata' : 'current';
+  const tag = fellBack ? ' ↩回退' : '';
+  return `${base}<div class="idx-file">${file}${tag}</div>`;
+}
+
 function short(s) {
   return s === 'ok' ? '可用' : s === 'partial' ? '部分' : '故障';
 }
@@ -65,7 +74,7 @@ function upsertRow(m) {
   const proxyBadge = m.redirected ? '<span class="badge proxy">↪代理</span>' : '';
   tr.innerHTML = `
     <td class="name">${m.name}${proxyBadge}<div class="base">${m.base}</div></td>
-    <td>${fmt(m.repodata)}</td>
+    <td>${fmtRepo(m)}</td>
     <td>${fmt(m.pkg)}</td>
     <td>${m.latency}ms</td>
     <td><span class="badge ${m.status}">${label(m.status)}</span></td>
@@ -92,7 +101,8 @@ function fmtLog(e) {
   switch (e.step) {
     case 'request': msg = `请求开始 platform=${e.platform} python=${e.python}`; break;
     case 'start': msg = `开始探测 ${e.name || ''}`; break;
-    case 'repodata': msg = `repodata -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
+    case 'repodata': msg = `repodata(${e.file || 'current'}) -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
+    case 'repodata-fallback': msg = `回退 repodata.json -> ${e.statusCode ?? 'ERR'} (${e.latency ?? '?'}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
     case 'parse': msg = `parse pythonLatest=${e.pythonLatest ?? 'null'} pkgCount=${e.pkgCount}`; break;
     case 'pkg': msg = `pkg(${e.pkgName}) -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
     case 'result': msg = `RESULT ${e.status} ${e.pythonNote}`; break;

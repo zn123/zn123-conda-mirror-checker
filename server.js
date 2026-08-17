@@ -252,17 +252,30 @@ function buildPythonNote(pyInfo, targetPy, matchedPkg) {
 // 探测单个镜像的「某一个 channel」（defaults 或 conda-forge）。
 // 返回该 channel 下的完整子结果：索引/包/python版本/重定向代理信息。
 async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log) {
-  const repodataUrl = `${baseUrl}/${platform}/current_repodata.json`;
   log({ step: 'start', mirror: m.id, channel: channelLabel, name: m.name });
 
-  // ① 完整下载 current_repodata.json 并解析出该源 python 的真实版本与包名。
-  const tmpFile = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  const repodata = await fetchJson(repodataUrl, tmpFile);
-
+  // ① 索引探测：先拉 current_repodata.json（conda 默认首选、约 1/7 体积、快），
+  //    失败（网络错 / 404 / 非 JSON）时回退 repodata.json（权威完整索引），对齐 conda 的 repodata_fns 行为。
+  let repodataFile = 'current_repodata.json';
+  const tmpA = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  let repodata = await fetchJson(`${baseUrl}/${platform}/${repodataFile}`, tmpA);
   let repodataOk = false;
   let pyInfo = { latest: null, latestPkg: null, versions: [] };
   if (repodata.ok && (repodata.statusCode === 200 || repodata.statusCode === 206)) {
     try { JSON.parse(repodata.body || '{}'); repodataOk = true; } catch (_) { /* 非 JSON → 索引不可用 */ }
+  }
+  // 回退：current 拿不到 → 试完整 repodata.json（用独立临时文件，避免与上面共享同一 tmp 触发竞态）
+  if (!repodataOk) {
+    repodataFile = 'repodata.json';
+    const fbUrl = `${baseUrl}/${platform}/${repodataFile}`;
+    const tmpB = path.join(os.tmpdir(), `zn123-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    const fb = await fetchJson(fbUrl, tmpB);
+    const fbOk = fb.ok && (fb.statusCode === 200 || fb.statusCode === 206);
+    let fbParsed = false;
+    if (fbOk) { try { JSON.parse(fb.body || '{}'); fbParsed = true; } catch (_) { /* 仍非 JSON */ } }
+    if (fbParsed) { repodataOk = true; repodata = fb; }
+    log({ step: 'repodata-fallback', mirror: m.id, channel: channelLabel, url: fbUrl,
+          statusCode: fb.statusCode, ok: fbParsed, error: fb.error || null });
   }
   if (repodataOk) pyInfo = parsePythonFromRepodata(repodata.body);
 
@@ -279,11 +292,12 @@ async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log
     : (redirected ? `已内部重定向（${dstHost}）` : null);
 
   log({
-    step: 'repodata', mirror: m.id, channel: channelLabel, url: repodataUrl,
+    step: 'repodata', mirror: m.id, channel: channelLabel, url: `${baseUrl}/${platform}/${repodataFile}`,
     statusCode: repodata.statusCode, contentType: repodata.contentType,
     latency: repodata.latency, bytes: repodata.bytes, ok: repodataOk,
     error: repodata.error || null, finalUrl: repodata.finalUrl,
     numRedirects: repodata.numRedirects, redirected: isProxy,
+    file: repodataFile, fellBack: repodataFile !== 'current_repodata.json',
   });
   log({ step: 'parse', mirror: m.id, channel: channelLabel, pythonLatest: pyInfo.latest, pkgCount: pyInfo.versions.length });
 
@@ -311,6 +325,7 @@ async function probeOneChannel(m, platform, targetPy, baseUrl, channelLabel, log
   log({ step: 'result', mirror: m.id, channel: channelLabel, status, pythonNote, repodataOk, pkgOk, matched: !!matchedPkg, proxy: isProxy });
 
   return {
+    repodataFile,
     repodata: {
       statusCode: repodata.statusCode, contentType: repodata.contentType,
       latency: repodata.latency, error: repodata.error || null,

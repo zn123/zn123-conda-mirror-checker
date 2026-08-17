@@ -25,6 +25,60 @@ const MIRRORS = [
 
 const TIMEOUT = 12000;       // 单请求超时(秒→在 curl 里用 /1000)
 
+// 探测日志：每次 /api/check 落盘到 logs/ 目录，便于事后排查「哪个源为啥下不到」
+const LOGS_DIR = path.join(ROOT, 'logs');
+try { fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch (_) {}
+
+// 生成日志文件名时间戳片段：YYYYMMDD-HHMMSS
+function tsStamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// 日志收集器：既 push 进数组（落盘用），又通过 SSE 实时写出（前端实时面板用）
+function makeLogger(res) {
+  const arr = [];
+  const push = (entry) => {
+    entry.ts = new Date().toISOString();
+    arr.push(entry);
+    try { res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`); } catch (_) { /* 连接已断，忽略 */ }
+  };
+  push.all = arr;
+  return push;
+}
+
+// 单条日志的人读格式化（写文件用，方便 grep）
+function fmtLogEntry(e) {
+  const t = (e.ts || '').replace('T', ' ').replace('Z', '');
+  switch (e.step) {
+    case 'request': return `[${t}] REQUEST platform=${e.platform} python=${e.python} reqId=${e.reqId}`;
+    case 'start': return `[${t}] [${e.mirror}] 开始探测 ${e.name || ''}`;
+    case 'repodata':
+      return `[${t}] [${e.mirror}] repodata -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''} ${e.url}`;
+    case 'parse':
+      return `[${t}] [${e.mirror}] parse pythonLatest=${e.pythonLatest ?? 'null'} pkgCount=${e.pkgCount}`;
+    case 'pkg':
+      return `[${t}] [${e.mirror}] pkg(${e.pkgName}) -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`;
+    case 'result':
+      return `[${t}] [${e.mirror}] RESULT ${e.status} ${e.pythonNote} (repodataOk=${e.repodataOk} pkgOk=${e.pkgOk} matched=${e.matched})`;
+    default:
+      return `[${t}] ${e.step} ${JSON.stringify(e)}`;
+  }
+}
+
+// 把一次完整请求的所有日志写入 logs/requests-<ts>-<reqId>.log
+function writeLogFile(reqId, platform, targetPy, summary, logs) {
+  const file = path.join(LOGS_DIR, `requests-${reqId}.log`);
+  const lines = [
+    `reqId=${reqId} platform=${platform} python=${targetPy}`,
+    `summary= ok:${summary.ok} partial:${summary.partial} fail:${summary.fail} total:${summary.total}`,
+    '---',
+  ];
+  for (const e of logs) lines.push(fmtLogEntry(e));
+  try { fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8'); } catch (_) { /* 落盘失败不阻断接口 */ }
+  return file;
+}
+
 // 探测单个 URL（丢弃 body）：底层调用本机 curl（而非 Node 原生 https）。
 // 原因：Cloudflare 等 CDN 会按 TLS 指纹拦截 Node 的请求（返回 403 Access Denied），
 // 而 curl / conda(Python OpenSSL) 的指纹被放行。用 curl 才能反映 conda 真实可用的镜像状态。
@@ -191,8 +245,9 @@ function buildPythonNote(pyInfo, targetPy, matchedPkg) {
   return `最新 ${latest}`;
 }
 
-async function checkMirror(m, platform, targetPy) {
+async function checkMirror(m, platform, targetPy, log) {
   const repodataUrl = `${m.base}/${platform}/current_repodata.json`;
+  log({ step: 'start', mirror: m.id, name: m.name });
 
   // ① 完整下载 current_repodata.json 并解析出该源 python 的真实版本与包名。
   //    能解析出合法 JSON 索引即视为"索引可用"。
@@ -206,11 +261,26 @@ async function checkMirror(m, platform, targetPy) {
   }
   if (repodataOk) pyInfo = parsePythonFromRepodata(repodata.body);
 
+  log({
+    step: 'repodata', mirror: m.id, url: repodataUrl,
+    statusCode: repodata.statusCode, contentType: repodata.contentType,
+    latency: repodata.latency, bytes: repodata.bytes, ok: repodataOk,
+    error: repodata.error || null,
+  });
+  log({ step: 'parse', mirror: m.id, pythonLatest: pyInfo.latest, pkgCount: pyInfo.versions.length });
+
   // ② 探测包优先匹配用户选择的版本；该源没有该版本时回退用最新版包（仍能反映下载能力）
   const matchedPkg = matchPythonPkg(pyInfo.versions, targetPy);
   const pkgName = matchedPkg || pyInfo.latestPkg || PKG_FALLBACK;
-  const pkg = await probe(`${m.base}/${platform}/${pkgName}`, { range: '0-1023' });
+  const pkgUrl = `${m.base}/${platform}/${pkgName}`;
+  const pkg = await probe(pkgUrl, { range: '0-1023' });
   const pkgOk = pkgGood(pkg);
+
+  log({
+    step: 'pkg', mirror: m.id, url: pkgUrl, pkgName,
+    statusCode: pkg.statusCode, contentType: pkg.contentType,
+    latency: pkg.latency, bytes: pkg.bytes, ok: pkgOk, error: pkg.error || null,
+  });
 
   // ③ 版本对照备注
   const pythonNote = buildPythonNote(pyInfo, targetPy, matchedPkg);
@@ -220,7 +290,7 @@ async function checkMirror(m, platform, targetPy) {
   if (repodataOk && pkgOk && matchedPkg) status = 'ok';
   else if (repodataOk || pkgOk) status = 'partial';
 
-  return {
+  const result = {
     id: m.id, name: m.name, base: m.base,
     repodata: {
       statusCode: repodata.statusCode, contentType: repodata.contentType,
@@ -235,6 +305,8 @@ async function checkMirror(m, platform, targetPy) {
     repodataOk, pkgOk, status,
     latency: Math.max(repodata.latency || 0, pkg.latency || 0),
   };
+  log({ step: 'result', mirror: m.id, status, pythonNote, repodataOk, pkgOk, matched: !!matchedPkg });
+  return result;
 }
 
 const MIME = {
@@ -272,26 +344,49 @@ const server = http.createServer(async (req, res) => {
     const q = new URL(req.url, 'http://localhost').searchParams;
     const platform = q.get('platform') || 'win-64';
     const targetPy = q.get('python') || '3.12';
-    try {
-      const mirrors = await Promise.all(MIRRORS.map((m) => checkMirror(m, platform, targetPy).catch((e) => ({
-        id: m.id, name: m.name, base: m.base,
-        repodata: { statusCode: null, contentType: '', latency: 0, error: String((e && e.message) || e), isHtml: false },
-        pkg: { statusCode: null, contentType: '', latency: 0, error: null },
-        pythonLatest: null, pythonPkg: null, pythonNote: '探测异常',
-        repodataOk: false, pkgOk: false, status: 'fail', latency: 0,
-      }))));
-      const summary = {
-        ok: mirrors.filter((r) => r.status === 'ok').length,
-        partial: mirrors.filter((r) => r.status === 'partial').length,
-        fail: mirrors.filter((r) => r.status === 'fail').length,
-        total: mirrors.length,
-      };
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ platform, python: targetPy, checkedAt: new Date().toISOString(), summary, mirrors }, null, 2));
-    } catch (e) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: e.message }));
-    }
+
+    // 改为 SSE：实时逐条推送探测日志(log) + 每源完成推结果(mirror) + 结束推 done
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+
+    const reqId = `${tsStamp()}-${Math.random().toString(36).slice(2, 8)}`;
+    const logger = makeLogger(res);
+    logger({ step: 'request', reqId, platform, python: targetPy });
+    res.write(`event: meta\ndata: ${JSON.stringify({ platform, python: targetPy, reqId })}\n\n`);
+
+    const results = [];
+    await Promise.all(MIRRORS.map((m) => checkMirror(m, platform, targetPy, logger)
+      .then((r) => {
+        results.push(r);
+        res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
+      })
+      .catch((e) => {
+        const r = {
+          id: m.id, name: m.name, base: m.base,
+          repodata: { statusCode: null, contentType: '', latency: 0, error: String((e && e.message) || e), isHtml: false },
+          pkg: { statusCode: null, contentType: '', latency: 0, error: null },
+          pythonLatest: null, pythonPkg: null, pythonNote: '探测异常',
+          repodataOk: false, pkgOk: false, status: 'fail', latency: 0,
+        };
+        results.push(r);
+        res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
+      })));
+
+    const summary = {
+      ok: results.filter((r) => r.status === 'ok').length,
+      partial: results.filter((r) => r.status === 'partial').length,
+      fail: results.filter((r) => r.status === 'fail').length,
+      total: results.length,
+    };
+    const logFile = writeLogFile(reqId, platform, targetPy, summary, logger.all);
+    logger({ step: 'done', reqId, logFile, summary });
+    res.write(`event: done\ndata: ${JSON.stringify({ summary, reqId, logFile })}\n\n`);
+    res.end();
     return;
   }
 

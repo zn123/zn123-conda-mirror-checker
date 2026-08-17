@@ -52,6 +52,14 @@
     </table>
   </main>
 
+  <section class="logs">
+    <details id="logPanel" open>
+      <summary>探测日志 <span id="logCount" class="muted"></span></summary>
+      <div id="logBody" class="log-body"></div>
+    </details>
+    <button id="downloadLog" type="button" class="link-btn" hidden>下载本次日志</button>
+  </section>
+
   <footer>
     <p>探测逻辑：① 完整拉取 <code>current_repodata.json</code> 验证是否为合法 JSON，并解析该源 python 的真实版本与包名；② 对该真实包发 Range 请求验证可下载（命中 502 / 403 / HTML 门户即判故障）；③ 对照你选择的 Python 版本，标注该源是否已同步。</p>
   </footer>

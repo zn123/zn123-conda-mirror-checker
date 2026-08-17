@@ -18,6 +18,7 @@
   - ✅ **ok（可用）**：索引可用、你选的 Python 版本存在、且该版本包能下载；
   - ⚠️ **partial（部分）**：索引与包可用但缺你选的版本（尚未同步/旧版已淘汰），或索引与包仅一项可用；
   - ❌ **fail（故障）**：索引与包都不可用（502 / 超时 / HTML 门户等）。
+- **探测日志**：页面底部实时滚动展示每个源每一步（索引 / 解析 / 包下载）的 URL、状态码、耗时、版本匹配结论与错误文案；同时后端把每次探测完整写入 `logs/requests-<时间戳>.log`，方便事后排查「到底哪个源为啥下不到」。
 
 ## 环境要求
 
@@ -40,31 +41,31 @@ node server.js
 
 ### `GET /api/check?platform=win-64&python=3.12`
 
-返回各镜像的探测结果（JSON）。`platform` 可选值：`win-64`（默认）、`linux-64`、`osx-64`、`osx-arm64`；`python` 可选值：`3.8` / `3.10` ~ `3.14`（默认 `3.12`）。
+**Server-Sent Events（SSE，`text/event-stream`）** 流式返回，逐条推送探测进度，便于前端实时展示日志面板。参数：`platform`（可选，默认 `win-64`，取值 `win-64`/`linux-64`/`osx-64`/`osx-arm64`）、`python`（可选，默认 `3.12`，取值 `3.8` / `3.10` ~ `3.14`）。
 
-响应结构：
+依次推送以下事件类型：
+
+- `meta`：`{ platform, python, reqId }` —— 本次请求元信息；
+- `mirror`：单个镜像探测完成的结果对象（结构见下），**逐个推送**，前端据此实时更新表格对应行；
+- `log`：单条探测日志 `{ ts, step, mirror?, url?, statusCode?, latency?, ok?, error?, ... }`，`step` 取值 `request` / `start` / `repodata` / `parse` / `pkg` / `result` / `done`；
+- `done`：`{ summary, reqId, logFile }` —— 汇总与本次落盘日志文件绝对路径。
+
+`mirror` 事件携带的对象结构（即下方示例）：
 
 ```json
 {
-  "platform": "win-64",
-  "checkedAt": "2026-08-17T11:20:00.000Z",
-  "summary": { "ok": 1, "partial": 2, "fail": 5, "total": 8 },
-  "mirrors": [
-    {
-      "id": "official",
-      "name": "官方 repo.anaconda.com",
-      "base": "https://repo.anaconda.com/pkgs/main",
-      "repodata": { "statusCode": 200, "contentType": "application/json", "latency": 800, "error": null, "isHtml": false },
-      "pkg":       { "statusCode": 206, "contentType": "application/x-conda", "latency": 1200, "error": null },
-      "repodataOk": true,
-      "pkgOk": true,
-      "status": "ok",
-      "latency": 1200,
-      "pythonLatest": "3.14.7",
-      "pythonPkg": "python-3.12.13-hd7b1df3_3.conda",
-      "pythonNote": "python 3.12.13 已同步"
-    }
-  ]
+  "id": "official",
+  "name": "官方 repo.anaconda.com",
+  "base": "https://repo.anaconda.com/pkgs/main",
+  "repodata": { "statusCode": 200, "contentType": "application/json", "latency": 800, "error": null, "isHtml": false },
+  "pkg":       { "statusCode": 206, "contentType": "application/x-conda", "latency": 1200, "error": null },
+  "repodataOk": true,
+  "pkgOk": true,
+  "status": "ok",
+  "latency": 1200,
+  "pythonLatest": "3.14.7",
+  "pythonPkg": "python-3.12.13-h63b1a2d_1.conda",
+  "pythonNote": "python 3.12.13 已同步"
 }
 ```
 
@@ -74,17 +75,19 @@ node server.js
 - `pythonLatest`：从该源 `current_repodata.json` 解析出的 python **最新版本号**（如 `3.14.7`）；解析失败为 `null`。
 - `pythonPkg`：下载探测所用的包名——**匹配你所选版本**；该源无此版本时回退为最新版包，再退为内置兜底包名。
 - `pythonNote`：该源是否含你选版本的对照结论（`python 3.12.13 已同步` / `无 3.8（源最新 3.14.7，旧版可能已淘汰）` / `无 3.14（源最新 3.12.13，尚未同步）`）。
+- `logFile`（`done` 事件字段）：本次探测完整日志的落盘绝对路径，文件为纯文本（每行一条 `step`），含每步 URL / 状态码 / 耗时，可直接 `grep` 排查。
 
 ## 项目结构
 
 ```
 zn123_conda_test/
 ├── package.json        # 启动脚本：npm start
-├── server.js           # 零依赖后端：静态服务 + /api/check 探测接口（底层调用 curl）
+├── server.js           # 零依赖后端：静态服务 + /api/check(SSE) 探测接口（底层调用 curl）
 ├── public/
-│   ├── index.html      # 中文界面
-│   ├── style.css       # 绿 / 黄 / 红状态配色
-│   └── app.js          # 拉取接口、渲染表格、支持平台切换与重新检测
+│   ├── index.html      # 中文界面（含探测日志面板）
+│   ├── style.css       # 绿 / 黄 / 红状态配色 + 日志面板样式
+│   └── app.js          # 通过 EventSource 消费 SSE，实时渲染表格与日志
+├── logs/               # 探测日志（运行时生成，每次 /api/check 一份 requests-<时间戳>.log）
 └── README.md
 ```
 
@@ -110,6 +113,7 @@ zn123_conda_test/
 - **`current_repodata.json` 完整下载、包探测用 `Range`**：repodata 需完整 JSON 才能解析出 python 真实版本与包名，用 curl 的 `--compressed` 就地解压 gzip（几 MB）；包探测仍用 `Range: 0-1023` 只取少量字节即可验证可下载性。
 - **包名从 repodata 动态解析，而非硬编码**：包文件名的 build 段（如 `hd7b1df3_3`）随平台/构建而变，硬编码会导致切平台时误判 404；改从该源 `current_repodata.json` 的 `packages` / `packages.conda` 区解析出真实包名，并按用户所选主次版本精确匹配（`current_repodata` 实际保留 2.7~3.14 多个 python 版本，并非只有最新版）。
 - **每个探测带硬性兜底定时器**：个别镜像卡死（如 TLS 握手挂起）不会拖垮整页。
+- **探测日志双通道**：后端用 SSE 实时推送每步 `log` 事件（前端实时面板），并在请求结束把完整日志写入 `logs/requests-<时间戳>.log`（纯文本，方便 grep 排查）；`checkMirror` 每步通过日志收集器同时落盘与推送，做到「既实时刷屏、又留档可查」。
 - **友好错误文案**：curl 出错时用正则提取 `curl: (N) message`，而非把整条命令串暴露给用户。
 
 ## License

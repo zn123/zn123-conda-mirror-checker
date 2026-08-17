@@ -31,6 +31,7 @@ function renderPending(mirrors) {
   mirrors.forEach((m) => {
     const tr = document.createElement('tr');
     tr.className = 'pending';
+    tr.dataset.id = m.id;
     tr.innerHTML = `
       <td class="name">${m.name}<div class="base">${m.base}</div></td>
       <td>—</td>
@@ -43,22 +44,23 @@ function renderPending(mirrors) {
   });
 }
 
-// 渲染探测结果
-function renderResult(data) {
-  tbody.innerHTML = '';
-  data.mirrors.forEach((m) => {
-    const tr = document.createElement('tr');
-    tr.className = m.status;
-    tr.innerHTML = `
-      <td class="name">${m.name}<div class="base">${m.base}</div></td>
-      <td>${fmt(m.repodata)}</td>
-      <td>${fmt(m.pkg)}</td>
-      <td>${m.latency}ms</td>
-      <td><span class="badge ${m.status}">${label(m.status)}</span></td>
-      <td class="note">${note(m)}</td>
-    `;
+// 实时更新/插入某一行（SSE mirror 事件驱动）
+function upsertRow(m) {
+  let tr = tbody.querySelector(`tr[data-id="${m.id}"]`);
+  if (!tr) {
+    tr = document.createElement('tr');
+    tr.dataset.id = m.id;
     tbody.appendChild(tr);
-  });
+  }
+  tr.className = m.status;
+  tr.innerHTML = `
+    <td class="name">${m.name}<div class="base">${m.base}</div></td>
+    <td>${fmt(m.repodata)}</td>
+    <td>${fmt(m.pkg)}</td>
+    <td>${m.latency}ms</td>
+    <td><span class="badge ${m.status}">${label(m.status)}</span></td>
+    <td class="note">${note(m)}</td>
+  `;
 }
 
 // 初始：仅拉取镜像列表，显示“待检测”，不发起探测
@@ -73,25 +75,96 @@ async function loadMirrors() {
   }
 }
 
-// 点击后才开始探测
-async function check() {
+// ---- 探测日志面板 ----
+function fmtLog(e) {
+  const t = (e.ts || '').replace('T', ' ').replace('Z', '');
+  let msg;
+  switch (e.step) {
+    case 'request': msg = `请求开始 platform=${e.platform} python=${e.python}`; break;
+    case 'start': msg = `开始探测 ${e.name || ''}`; break;
+    case 'repodata': msg = `repodata -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
+    case 'parse': msg = `parse pythonLatest=${e.pythonLatest ?? 'null'} pkgCount=${e.pkgCount}`; break;
+    case 'pkg': msg = `pkg(${e.pkgName}) -> ${e.statusCode ?? 'ERR'} (${e.latency}ms) ${e.ok ? 'OK' : 'FAIL'}${e.error ? ' err=' + e.error : ''}`; break;
+    case 'result': msg = `RESULT ${e.status} ${e.pythonNote}`; break;
+    case 'done': msg = `完成 日志已落盘 ${e.logFile || ''}`; break;
+    default: msg = JSON.stringify(e);
+  }
+  return { t, msg, step: e.step, mirror: e.mirror };
+}
+
+function logLineText(e) {
+  const { t, msg, step, mirror } = fmtLog(e);
+  return `[${t}] ${step}${mirror ? ' [' + mirror + ']' : ''} ${msg}`;
+}
+
+function appendLog(e) {
+  const { t, msg, step, mirror } = fmtLog(e);
+  const div = document.createElement('div');
+  div.className = `log-line step-${step}` + (mirror ? ` src-${mirror}` : '');
+  div.innerHTML = `<span class="log-t">${t}</span><span class="log-m">${mirror ? '[' + mirror + '] ' : ''}${msg}</span>`;
+  $('#logBody').appendChild(div);
+  $('#logBody').scrollTop = $('#logBody').scrollHeight; // 自动滚到底部
+}
+
+// ---- 检测：改用 EventSource 实时消费 SSE ----
+let es = null;
+let lastLogs = [];
+
+function check() {
   const platform = $('#platform').value;
   const py = $('#python').value;
+  if (es) es.close();
+
+  $('#logBody').innerHTML = '';
+  lastLogs = [];
+  $('#logCount').textContent = '';
+  $('#downloadLog').hidden = true;
   $('#status').textContent = '检测中…';
   $('#checkBtn').disabled = true;
-  try {
-    const resp = await fetch(`/api/check?platform=${encodeURIComponent(platform)}&python=${encodeURIComponent(py)}`);
-    const data = await resp.json();
-    renderResult(data);
+
+  es = new EventSource(`/api/check?platform=${encodeURIComponent(platform)}&python=${encodeURIComponent(py)}`);
+
+  es.addEventListener('meta', () => {});
+  es.addEventListener('mirror', (ev) => {
+    try { upsertRow(JSON.parse(ev.data)); } catch (_) {}
+  });
+  es.addEventListener('log', (ev) => {
+    try {
+      const e = JSON.parse(ev.data);
+      lastLogs.push(e);
+      appendLog(e);
+      $('#logCount').textContent = `(${lastLogs.length} 条)`;
+    } catch (_) {}
+  });
+  es.addEventListener('done', (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      $('#summary').textContent =
+        `可用 ${d.summary.ok} · 部分 ${d.summary.partial} · 故障 ${d.summary.fail}（共 ${d.summary.total}）`;
+    } catch (_) {}
     $('#status').textContent = '';
-    $('#summary').textContent =
-      `可用 ${data.summary.ok} · 部分 ${data.summary.partial} · 故障 ${data.summary.fail}（共 ${data.summary.total}）`;
-  } catch (e) {
-    $('#status').textContent = '检测失败: ' + e.message;
-  } finally {
     $('#checkBtn').disabled = false;
-  }
+    $('#downloadLog').hidden = false;
+    es.close();
+    es = null;
+  });
+  es.onerror = () => {
+    $('#status').textContent = '连接中断，检测可能未完成';
+    $('#checkBtn').disabled = false;
+    if (es) { es.close(); es = null; }
+  };
 }
 
 $('#checkBtn').addEventListener('click', check);
+
+$('#downloadLog').addEventListener('click', () => {
+  const text = lastLogs.map(logLineText).join('\n') + '\n';
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `conda-probe-${Date.now()}.log`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 loadMirrors(); // 页面加载只展示列表，不自动探测

@@ -38,7 +38,7 @@ function note(m) {
 }
 
 function label(s) {
-  return s === 'ok' ? '✅ 可用' : s === 'partial' ? '⚠️ 部分' : '❌ 故障';
+  return s === 'ok' ? '✅ 可用' : s === 'partial' ? '⚠️ 部分' : s === 'deprecated' ? '🗑️ 废弃' : '❌ 故障';
 }
 
 // 渲染未检测列表（页面初始状态）
@@ -46,15 +46,19 @@ function renderPending(mirrors) {
   tbody.innerHTML = '';
   mirrors.forEach((m) => {
     const tr = document.createElement('tr');
-    tr.className = 'pending';
+    tr.className = m.deprecated ? 'deprecated' : 'pending';
     tr.dataset.id = m.id;
+    const badge = m.deprecated
+      ? '<span class="badge deprecated">已废弃</span>'
+      : '<span class="badge pending">待检测</span>';
+    const note = m.deprecated ? '已废弃，不参与探测' : '—';
     tr.innerHTML = `
       <td class="name">${m.name}<div class="base">${m.base}</div></td>
       <td>—</td>
       <td>—</td>
       <td>—</td>
-      <td><span class="badge pending">待检测</span></td>
-      <td class="note">—</td>
+      <td>${badge}</td>
+      <td class="note">${note}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -71,8 +75,9 @@ function upsertRow(m) {
   tr.className = m.status;
   const proxyBadge = m.redirected ? '<span class="badge proxy">↪代理</span>' : '';
   const archiveBadge = m.isArchive ? '<span class="badge archive">归档包</span>' : '';
+  const deprecatedBadge = m.deprecated ? '<span class="badge deprecated">已废弃</span>' : '';
   tr.innerHTML = `
-    <td class="name">${m.name}${proxyBadge}${archiveBadge}<div class="base">${m.base}</div></td>
+    <td class="name">${m.name}${proxyBadge}${archiveBadge}${deprecatedBadge}<div class="base">${m.base}</div></td>
     <td>${fmtRepo(m)}</td>
     <td>${fmt(m.pkg)}</td>
     <td>${m.latency}ms</td>
@@ -164,8 +169,10 @@ function check() {
   es.addEventListener('done', (ev) => {
     try {
       const d = JSON.parse(ev.data);
-      $('#summary').textContent =
-        `可用 ${d.summary.ok} · 部分 ${d.summary.partial} · 故障 ${d.summary.fail}（共 ${d.summary.total}）`;
+      let txt = `可用 ${d.summary.ok} · 部分 ${d.summary.partial} · 故障 ${d.summary.fail}`;
+      if (d.summary.deprecated) txt += ` · 废弃 ${d.summary.deprecated}`;
+      txt += `（共 ${d.summary.total}）`;
+      $('#summary').textContent = txt;
       if (d.compliance) $('#compliance').textContent = d.compliance;
     } catch (_) {}
     $('#status').textContent = '';

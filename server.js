@@ -426,7 +426,7 @@ const server = http.createServer(async (req, res) => {
   if (u === '/api/mirrors') {
     // 仅返回镜像源列表（不探测），供页面初始展示
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ mirrors: MIRRORS.map(({ id, name, base, cf }) => ({ id, name, base, cf })) }));
+    res.end(JSON.stringify({ mirrors: MIRRORS.map(({ id, name, base, cf, deprecated }) => ({ id, name, base, cf, deprecated: !!deprecated })) }));
     return;
   }
 
@@ -451,27 +451,43 @@ const server = http.createServer(async (req, res) => {
     res.write(`event: meta\ndata: ${JSON.stringify({ platform, python: targetPy, channel, reqId })}\n\n`);
 
     const results = [];
-    await Promise.all(MIRRORS.map((m) => checkMirror(m, platform, targetPy, channel, logger)
-      .then((r) => {
-        results.push(r);
-        res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
-      })
-      .catch((e) => {
+    await Promise.all(MIRRORS.map((m) => {
+      // 废弃源：仅展示、不参与探测，直接发一条 deprecated 状态的 mirror 事件
+      if (m.deprecated) {
         const r = {
-          id: m.id, name: m.name, base: m.base, channel,
-          repodata: { statusCode: null, contentType: '', latency: 0, error: String((e && e.message) || e), isHtml: false },
+          id: m.id, name: m.name, base: m.base, channel, deprecated: true,
+          repodata: { statusCode: null, contentType: '', latency: 0, error: null, isHtml: false },
           pkg: { statusCode: null, contentType: '', latency: 0, error: null },
-          pythonLatest: null, pythonPkg: null, pythonNote: '探测异常',
-          repodataOk: false, pkgOk: false, status: 'fail', latency: 0,
+          pythonLatest: null, pythonPkg: null, pythonNote: '已废弃，不参与探测',
+          repodataOk: false, pkgOk: false, status: 'deprecated', latency: 0,
         };
         results.push(r);
         res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
-      })));
+        return Promise.resolve();
+      }
+      return checkMirror(m, platform, targetPy, channel, logger)
+        .then((r) => {
+          results.push(r);
+          res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
+        })
+        .catch((e) => {
+          const r = {
+            id: m.id, name: m.name, base: m.base, channel,
+            repodata: { statusCode: null, contentType: '', latency: 0, error: String((e && e.message) || e), isHtml: false },
+            pkg: { statusCode: null, contentType: '', latency: 0, error: null },
+            pythonLatest: null, pythonPkg: null, pythonNote: '探测异常',
+            repodataOk: false, pkgOk: false, status: 'fail', latency: 0,
+          };
+          results.push(r);
+          res.write(`event: mirror\ndata: ${JSON.stringify(r)}\n\n`);
+        });
+    }));
 
     const summary = {
       ok: results.filter((r) => r.status === 'ok').length,
       partial: results.filter((r) => r.status === 'partial').length,
       fail: results.filter((r) => r.status === 'fail').length,
+      deprecated: results.filter((r) => r.status === 'deprecated').length,
       total: results.length,
     };
     // D. 合规提示：defaults 频道受 Anaconda 商业许可约束，conda-forge 不受限

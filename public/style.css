@@ -90,6 +90,8 @@ tr.ok td:first-child { border-left: 4px solid #22c55e; }
 tr.partial td:first-child { border-left: 4px solid #f59e0b; }
 tr.fail td:first-child { border-left: 4px solid #ef4444; }
 tr.pending td:first-child { border-left: 4px solid #cbd5e1; }
+tr.deprecated td:first-child { border-left: 4px solid #94a3b8; }
+tr.deprecated { color: #94a3b8; }
 
 .badge {
   display: inline-block;
@@ -102,6 +104,7 @@ tr.pending td:first-child { border-left: 4px solid #cbd5e1; }
 .badge.partial { background: #fef3c7; color: #b45309; }
 .badge.fail { background: #fee2e2; color: #b91c1c; }
 .badge.pending { background: #f1f5f9; color: #64748b; }
+.badge.deprecated { background: #e2e8f0; color: #64748b; }
 .badge.proxy { background: #e0e7ff; color: #4338ca; margin-left: 6px; }
 .badge.archive { background: #f1f5f9; color: #64748b; margin-left: 6px; }
 

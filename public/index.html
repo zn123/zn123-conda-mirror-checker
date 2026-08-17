@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>conda 镜像源检测</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>conda 镜像源状态检测</h1>
+    <p class="sub">实时探测各镜像源的 repodata 索引与 python 包下载可用性</p>
+  </header>
+
+  <section class="controls">
+    <label>平台：
+      <select id="platform">
+        <option value="win-64">win-64</option>
+        <option value="linux-64">linux-64</option>
+        <option value="osx-64">osx-64</option>
+        <option value="osx-arm64">osx-arm64</option>
+      </select>
+    </label>
+    <button id="checkBtn">开始检测</button>
+    <span id="status" class="status"></span>
+    <span id="summary" class="summary"></span>
+  </section>
+
+  <main>
+    <table id="result">
+      <thead>
+        <tr>
+          <th>镜像源</th>
+          <th>索引 repodata</th>
+          <th>包下载 pkg</th>
+          <th>延迟</th>
+          <th>状态</th>
+          <th>备注</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </main>
+
+  <footer>
+    <p>探测逻辑：① 拉取 <code>current_repodata.json</code> 验证是否为合法 JSON；② 对 <code>python-3.12.13</code> 包发 Range 请求验证可下载。命中 502 / 403 / HTML 门户即判为故障。</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

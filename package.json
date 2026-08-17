@@ -1,0 +1,10 @@
+{
+  "name": "zn123-conda-mirror-checker",
+  "version": "1.0.0",
+  "description": "查看各 conda 镜像源可用性的 Web 工具（零依赖，纯 Node 内置模块）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

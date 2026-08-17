@@ -21,6 +21,15 @@
         <option value="osx-arm64">osx-arm64</option>
       </select>
     </label>
+    <label>Python：
+      <select id="python">
+        <option value="3.14">3.14</option>
+        <option value="3.13">3.13</option>
+        <option value="3.12" selected>3.12</option>
+        <option value="3.11">3.11</option>
+        <option value="3.10">3.10</option>
+      </select>
+    </label>
     <button id="checkBtn">开始检测</button>
     <span id="status" class="status"></span>
     <span id="summary" class="summary"></span>
@@ -43,7 +52,7 @@
   </main>
 
   <footer>
-    <p>探测逻辑：① 拉取 <code>current_repodata.json</code> 验证是否为合法 JSON；② 对 <code>python-3.12.13</code> 包发 Range 请求验证可下载。命中 502 / 403 / HTML 门户即判为故障。</p>
+    <p>探测逻辑：① 完整拉取 <code>current_repodata.json</code> 验证是否为合法 JSON，并解析该源 python 的真实版本与包名；② 对该真实包发 Range 请求验证可下载（命中 502 / 403 / HTML 门户即判故障）；③ 对照你选择的 Python 版本，标注该源是否已同步。</p>
   </footer>
 
   <script src="/app.js"></script>

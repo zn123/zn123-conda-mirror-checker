@@ -9,6 +9,7 @@ function fmt(r) {
 
 function note(m) {
   const notes = [];
+  if (m.pythonNote) notes.push(m.pythonNote);
   if (m.repodata.isHtml) notes.push('返回网页门户（非 conda 索引）');
   if (m.repodata.statusCode === 404) notes.push('索引 404');
   if (m.pkg.statusCode === 502) notes.push('包下载 502（后端故障）');
@@ -75,10 +76,11 @@ async function loadMirrors() {
 // 点击后才开始探测
 async function check() {
   const platform = $('#platform').value;
+  const py = $('#python').value;
   $('#status').textContent = '检测中…';
   $('#checkBtn').disabled = true;
   try {
-    const resp = await fetch(`/api/check?platform=${encodeURIComponent(platform)}`);
+    const resp = await fetch(`/api/check?platform=${encodeURIComponent(platform)}&python=${encodeURIComponent(py)}`);
     const data = await resp.json();
     renderResult(data);
     $('#status').textContent = '';

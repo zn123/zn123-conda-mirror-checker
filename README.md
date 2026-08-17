@@ -7,10 +7,12 @@
 ## 功能
 
 - 在浏览器里以表格展示 8 个 conda 镜像源的状态（绿 / 黄 / 红）。
-- 每个镜像同时测两件事：
-  1. `current_repodata.json` 是否返回合法 JSON（识别 404 / HTML 门户）；
-  2. 对 `python-3.12.13` 包发 Range 请求，验证能否下载（识别 502 / 429 / 403）。
+- 每个镜像同时做三件事：
+  1. 完整拉取 `current_repodata.json`，验证是否返回合法 JSON（识别 404 / HTML 门户）；
+  2. 解析该源 python 的真实版本与包名，对该真实包发 Range 请求验证能否下载（识别 502 / 429 / 403）；
+  3. 对照你选择的 Python 版本，标注该源是否已同步。
 - 支持切换平台：`win-64` / `linux-64` / `osx-64` / `osx-arm64`。
+- 支持选择 Python 版本：`3.10` ~ `3.14`，探测结果对照该版本标注各源同步进度。
 - 页面加载**先列出全部镜像源（待检测状态）**，点击「开始检测」按钮才发起探测，不会一打开就自动打网络（后端对应 `GET /api/mirrors` 仅返回列表、不探测）。
 - 状态判定：
   - ✅ **ok（可用）**：索引和包都正常；
@@ -25,7 +27,7 @@
 ## 启动
 
 ```bash
-cd E:\temp_python_ai\__translate_zn123pose\_api\zn123_conda_test
+cd zn123_conda_test
 node server.js
 # 或： npm start
 ```
@@ -36,9 +38,9 @@ node server.js
 
 ## 接口
 
-### `GET /api/check?platform=win-64`
+### `GET /api/check?platform=win-64&python=3.12`
 
-返回各镜像的探测结果（JSON）。`platform` 可选值：`win-64`（默认）、`linux-64`、`osx-64`、`osx-arm64`。
+返回各镜像的探测结果（JSON）。`platform` 可选值：`win-64`（默认）、`linux-64`、`osx-64`、`osx-arm64`；`python` 可选值：`3.10` ~ `3.14`（默认 `3.12`）。
 
 响应结构：
 
@@ -57,7 +59,10 @@ node server.js
       "repodataOk": true,
       "pkgOk": true,
       "status": "ok",
-      "latency": 1200
+      "latency": 1200,
+      "pythonLatest": "3.14.7",
+      "pythonPkg": "python-3.14.7-h7ce57fb_101_cp314.conda",
+      "pythonNote": "源已更新至 3.14.7（未精确验证 3.12）"
     }
   ]
 }
@@ -66,6 +71,9 @@ node server.js
 字段说明：
 - `repodata` / `pkg`：索引与包的探测详情；`statusCode` 为 HTTP 状态码，`latency` 为毫秒，`error` 为失败时的友好文案（如 `超时`、`Could not resolve host`）。
 - `isHtml`：当 `repodata` 实际返回 HTML 门户页时为 `true`（坏源标志，如华为云）。
+- `pythonLatest`：从该源 `current_repodata.json` 解析出的 python **最新版本号**（如 `3.14.7`）；解析失败为 `null`。
+- `pythonPkg`：该源真实存在的 python 包文件名（下载探测即针对此包）；解析失败时回退为内置兜底包名。
+- `pythonNote`：该源 python 最新版本与你所选版本的对照结论（`已同步` / `源已更新至 X` / `源最新 X，尚未同步到 Y`）。
 
 ## 项目结构
 
@@ -99,7 +107,8 @@ zn123_conda_test/
 
 - **用 curl 而非 Node 原生 HTTPS**：Cloudflare 等 CDN 会按 TLS 指纹拦截 Node 请求，curl / conda 的指纹放行。
 - **用 `os.devNull` 而非 `/dev/null`**：Windows 下 `curl.exe` 不认 `/dev/null`，必须用 Node 的跨平台空设备。
-- **探测统一用 `Range` 只取少量字节**：完整 `repodata.json` 有数 MB，慢镜像会触发超时误判；只取 `0-0` / `0-1023` 字节又快又准。
+- **`current_repodata.json` 完整下载、包探测用 `Range`**：repodata 需完整 JSON 才能解析出 python 真实版本与包名，用 curl 的 `--compressed` 就地解压 gzip（几 MB）；包探测仍用 `Range: 0-1023` 只取少量字节即可验证可下载性。
+- **包名从 repodata 动态解析，而非硬编码**：包文件名的 build 段（如 `hd7b1df3_3`）随平台/构建而变，硬编码会导致切平台时误判 404；改从该源 `current_repodata.json` 的 `packages` / `packages.conda` 区解析出真实包名。
 - **每个探测带硬性兜底定时器**：个别镜像卡死（如 TLS 握手挂起）不会拖垮整页。
 - **友好错误文案**：curl 出错时用正则提取 `curl: (N) message`，而非把整条命令串暴露给用户。
 

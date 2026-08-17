@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 在浏览器里以表格展示 conda 镜像源的状态（绿 / 黄 / 红）；默认启用 10 个镜像，当前无 `deprecated` 源。如需让某源「只显示、不探测」，可在 `mirrors.js` 中给它加 `deprecated: true` 字段（界面标注「已废弃」）。
+- 在浏览器里以表格展示 conda 镜像源的状态（绿 / 黄 / 红）；默认启用 11 个镜像，其中**网易 163 标记为 `deprecated`——仅显示、不参与探测**（界面标注「已废弃」）。如需让某源「只显示、不探测」，可在 `mirrors.js` 中给它加 `deprecated: true` 字段（界面标注「已废弃」）。
 - 每个镜像做两步纯 HEAD 探测（不下载任何正文）：
   1. **第一步·索引**：对 `repodata.json` 发 HTTP HEAD——返回 200/206 且非 HTML 即「索引可达」（不下载约 270MB 的完整索引，彻底规避公网大文件限流/长连接超时导致的假 fail）。
   2. **第二步·包**：对**硬编码的 python 包名**（见「实现要点」）发 HTTP HEAD——返回 200/206 即「包可达」。
@@ -134,7 +134,7 @@ zn123_conda_test/
 
 > 每个源还有独立的 `conda-forge` 频道地址（`cloud/conda-forge` 或官方源的 `conda.anaconda.org/conda-forge`），由 `channel=conda-forge` / `both` 触发探测。
 >
-> 注：当前 10 个镜像**均无 `deprecated`**，全部参与探测。如需让某源「只显示、不探测」，在 `mirrors.js` 对应对象加 `deprecated: true` 即可；彻底移除则删除对应对象。
+> 注：当前 11 个镜像中，**网易 163 标记 `deprecated: true`，仅显示、不参与探测**（故实际参与探测 10 个）。如需让某源「只显示、不探测」，在 `mirrors.js` 对应对象加 `deprecated: true` 即可；彻底移除则删除对应对象。
 >
 > 阿里云的 conda-forge 地址 `https://mirrors.aliyun.com/anaconda/cloud/conda-forge` 可能已随阿里云镜像调整而下线（实测返回 404）；若需保留阿里云，请以阿里云最新镜像文档为准更新 `MIRRORS` 中 `cf` 字段，工具会如实显示 404。
 

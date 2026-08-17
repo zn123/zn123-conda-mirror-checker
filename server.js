@@ -149,12 +149,12 @@ function parsePythonFromRepodata(body) {
         }
       }
     }
-    if (!names.length) return { latest: null, latestPkg: null };
+    if (!names.length) return { latest: null, latestPkg: null, versions: [] };
     names.sort((a, b) => cmpVersion(verOf(a), verOf(b)));
     const latestPkg = names[names.length - 1];
-    return { latest: verOf(latestPkg), latestPkg };
+    return { latest: verOf(latestPkg), latestPkg, versions: names };
   } catch (_) {
-    return { latest: null, latestPkg: null };
+    return { latest: null, latestPkg: null, versions: [] };
   }
 }
 
@@ -165,15 +165,30 @@ function pkgGood(r) {
   return false;
 }
 
-// 生成"该源 python 最新版本 vs 用户目标版本"的备注
-function buildPythonNote(latest, targetPy) {
-  if (!latest) return '未解析到 python 包';
-  const mm = majorMinor(latest);
+// 从 python 包名列表里，找主次版本号 == target（如 "3.12"）的包，返回其中 build 最新者。
+// 返回 null 表示该源没有这个主次版本。
+function matchPythonPkg(versions, targetPy) {
+  const t = majorMinor(String(targetPy || '3.12'));
+  let best = null, bestVer = '';
+  for (const n of versions || []) {
+    if (majorMinor(verOf(n)) === t) {
+      const v = verOf(n);
+      if (!best || cmpVersion(v, bestVer) > 0) { best = n; bestVer = v; }
+    }
+  }
+  return best;
+}
+
+// 生成版本对照备注：优先反映"该源是否有用户选的版本"
+function buildPythonNote(pyInfo, targetPy, matchedPkg) {
   const t = String(targetPy || '3.12');
-  const c = cmpMajorMinor(mm, t);
-  if (c === 0) return `python ${latest} 已同步`;
-  if (c > 0) return `源已更新至 ${latest}（未精确验证 ${t}）`;
-  return `源最新 ${latest}，尚未同步到 ${t}`;
+  const latest = pyInfo.latest;
+  if (!latest) return '未解析到 python 包';
+  if (matchedPkg) return `python ${verOf(matchedPkg)} 已同步`;
+  const c = cmpMajorMinor(majorMinor(latest), t);
+  if (c > 0) return `无 ${t}（源最新 ${latest}，旧版可能已淘汰）`;
+  if (c < 0) return `无 ${t}（源最新 ${latest}，尚未同步）`;
+  return `最新 ${latest}`;
 }
 
 async function checkMirror(m, platform, targetPy) {
@@ -185,27 +200,24 @@ async function checkMirror(m, platform, targetPy) {
   const repodata = await fetchJson(repodataUrl, tmpFile);
 
   let repodataOk = false;
-  let pythonLatest = null, pythonLatestPkg = null;
+  let pyInfo = { latest: null, latestPkg: null, versions: [] };
   if (repodata.ok && (repodata.statusCode === 200 || repodata.statusCode === 206)) {
     try { JSON.parse(repodata.body || '{}'); repodataOk = true; } catch (_) { /* 非 JSON → 索引不可用 */ }
   }
-  if (repodataOk) {
-    const p = parsePythonFromRepodata(repodata.body);
-    pythonLatest = p.latest;
-    pythonLatestPkg = p.latestPkg;
-  }
+  if (repodataOk) pyInfo = parsePythonFromRepodata(repodata.body);
 
-  // ② 用"该源真实存在的 python 包名"做下载探测（顺带修复跨平台 build hash 误判）。
-  //    拿不到真实包名时回退到硬编码兜底包名。
-  const pkgName = pythonLatestPkg || PKG_FALLBACK;
+  // ② 探测包优先匹配用户选择的版本；该源没有该版本时回退用最新版包（仍能反映下载能力）
+  const matchedPkg = matchPythonPkg(pyInfo.versions, targetPy);
+  const pkgName = matchedPkg || pyInfo.latestPkg || PKG_FALLBACK;
   const pkg = await probe(`${m.base}/${platform}/${pkgName}`, { range: '0-1023' });
   const pkgOk = pkgGood(pkg);
 
-  // ③ 版本比对备注
-  const pythonNote = buildPythonNote(pythonLatest, targetPy);
+  // ③ 版本对照备注
+  const pythonNote = buildPythonNote(pyInfo, targetPy, matchedPkg);
 
+  // ④ 状态：索引 + 包 + 版本齐备才算 ok；索引与包可用但缺目标版本 → partial
   let status = 'fail';
-  if (repodataOk && pkgOk) status = 'ok';
+  if (repodataOk && pkgOk && matchedPkg) status = 'ok';
   else if (repodataOk || pkgOk) status = 'partial';
 
   return {
@@ -219,7 +231,7 @@ async function checkMirror(m, platform, targetPy) {
       statusCode: pkg.statusCode, contentType: pkg.contentType,
       latency: pkg.latency, error: pkg.error || null,
     },
-    pythonLatest, pythonPkg: pkgName, pythonNote,
+    pythonLatest: pyInfo.latest, pythonPkg: pkgName, pythonNote,
     repodataOk, pkgOk, status,
     latency: Math.max(repodata.latency || 0, pkg.latency || 0),
   };
